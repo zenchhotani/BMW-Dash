@@ -1,0 +1,66 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.zen.bmwdash'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.zen.bmwdash'
+        minSdk 29
+        targetSdk 35
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)
+        versionName "1.0.${System.getenv('GITHUB_RUN_NUMBER') ?: '0'}"
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    // Personal sideload key kept in the repo so new builds install over old ones.
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('signing/sideload.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    androidResources { noCompress 'tflite' }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint { abortOnError false; checkReleaseBuilds false }
+}
+
+dependencies {
+    def camerax = '1.4.2'
+    implementation "androidx.camera:camera-core:$camerax"
+    implementation "androidx.camera:camera-camera2:$camerax"
+    implementation "androidx.camera:camera-lifecycle:$camerax"
+    implementation "androidx.camera:camera-video:$camerax"
+    implementation "androidx.camera:camera-view:$camerax"
+    implementation 'androidx.activity:activity:1.9.3'
+    implementation 'androidx.annotation:annotation-experimental:1.4.1'
+    implementation 'androidx.core:core:1.15.0'
+    implementation 'com.google.guava:guava:33.3.1-android'
+    implementation 'com.google.mediapipe:tasks-vision:0.10.26'
+    implementation 'org.maplibre.gl:android-sdk:11.8.8'
+}
+
+// The object-detection model (Apache 2.0, from Google MediaPipe) is fetched at build time.
+tasks.register('fetchModel') {
+    def out = file('src/main/assets/detector.tflite')
+    outputs.file(out)
+    doLast {
+        if (out.exists() && out.length() > 1000000) return
+        out.parentFile.mkdirs()
+        def base = 'https://storage.googleapis.com/mediapipe-models/object_detector/'
+        def ok = false
+        for (path in ['efficientdet_lite2/int8/latest/efficientdet_lite2.tflite',
+                      'efficientdet_lite2/float16/latest/efficientdet_lite2.tflite',
+                      'efficientdet_lite0/float16/latest/efficientdet_lite0.tflite']) {
+            try {
+                new URL(base + path).withInputStream { i -> out.withOutputStream { it << i } }
+                if (out.length() > 1000000) { ok = true; println "model: $path (${out.length()} bytes)"; break }
+            } catch (Exception e) { println "model not available: $path ($e)" }
+        }
+        if (!ok) throw new GradleException('Could not download the detection model')
+    }
+}
+preBuild.dependsOn 'fetchModel'
