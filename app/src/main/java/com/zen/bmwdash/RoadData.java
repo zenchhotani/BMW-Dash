@@ -52,6 +52,12 @@ final class RoadData {
     private double flowLat, flowLon;
 
     Road road = new Road();
+    private Road tom = new Road(), osm = new Road(), nom = new Road();
+    private long tomTry = -100000, nomTry = -100000;
+    private double tomLat, tomLon, tomAtLat, tomAtLon, nomLat, nomLon, nomAtLat, nomAtLon;
+    private final long[] blockedUntil = new long[2];
+    /** why the last road lookup failed, empty when fine */
+    String roadProblem = "";
     double flow = Double.NaN, freeFlow = Double.NaN; // m/s
     Weather weather;
     List<Incident> incidents = new ArrayList<>();
@@ -60,16 +66,34 @@ final class RoadData {
 
     RoadData(Prefs p) { prefs = p; }
 
-    void refreshNow() { flowTime = incidentTime = -1000000; trafficStatus = ""; }
+    void refreshNow() { flowTime = incidentTime = tomTry = nomTry = -1000000; trafficStatus = roadProblem = ""; }
 
     /** Call on the main thread with each location fix; throttles itself. */
     void update(double lat, double lon, double heading, boolean headingValid) {
         long now = SystemClock.elapsedRealtime();
+        String roadKey = prefs.tomtomKey();
+        // 1) TomTom (with a key): road name and posted limit
+        double fromTom = Geo.distance(lat, lon, tomLat, tomLon);
+        if (!roadKey.isEmpty() && now - tomTry > 6_000 && (fromTom > 60 || now - tomTry > 60_000)) {
+            tomTry = now; tomLat = lat; tomLon = lon;
+            livePool.execute(() -> fetchTomTomRoad(lat, lon, heading, headingValid, roadKey));
+        }
+        // 2) OpenStreetMap Overpass: limit and lane count
         boolean stale = ways == null || Geo.distance(lat, lon, waysLat, waysLon) > 220 || now - waysTime > 600_000;
-        if (stale && now - roadTry > 12_000) {
+        if (stale && now - roadTry > 15_000) {
             roadTry = now;
             roadPool.execute(() -> fetchWays(lat, lon, heading, headingValid));
-        } else match(lat, lon, heading, headingValid);
+        }
+        // 3) Nominatim: road name when neither of the above has one (their policy: go gently)
+        boolean unnamed = tom.name.isEmpty() && osm.name.isEmpty();
+        if (unnamed && now - nomTry > 15_000 && (nom.name.isEmpty() || Geo.distance(lat, lon, nomLat, nomLon) > 80)) {
+            nomTry = now; nomLat = lat; nomLon = lon;
+            userPool.execute(() -> fetchNominatimRoad(lat, lon));
+        }
+        // never show a name or limit from a place we have left
+        if (Geo.distance(lat, lon, tomAtLat, tomAtLon) > 300) tom = new Road();
+        if (Geo.distance(lat, lon, nomAtLat, nomAtLon) > 300) nom = new Road();
+        match(lat, lon, heading, headingValid);
 
         String key = prefs.tomtomKey();
         if (!key.isEmpty()) {
@@ -83,22 +107,82 @@ final class RoadData {
         if (now - weatherTime > 600_000) { weatherTime = now; livePool.execute(() -> fetchWeather(lat, lon)); }
     }
 
+    private void fetchTomTomRoad(double lat, double lon, double heading, boolean valid, String key) {
+        try {
+            String u = String.format(Locale.US, "https://api.tomtom.com/search/2/reverseGeocode/%.6f,%.6f.json?returnSpeedLimit=true&radius=60&key=%s", lat, lon, enc(key));
+            if (valid) u += "&heading=" + Math.round(heading);
+            JSONArray a = new JSONObject(http(u, null)).getJSONArray("addresses");
+            Road found = new Road();
+            if (a.length() > 0) {
+                JSONObject ad = a.getJSONObject(0).getJSONObject("address");
+                found.name = ad.optString("streetName", ad.optString("street"));
+                String limit = ad.optString("speedLimit").toLowerCase(Locale.US);
+                found.limit = Geo.parseMaxSpeedKmh(limit) / 3.6;
+            }
+            main.post(() -> { tom = found; tomAtLat = lat; tomAtLon = lon; roadProblem = ""; compose(); onChange.run(); });
+        } catch (Exception e) {
+            Log.w(TAG, "tomtom road " + e.getMessage());
+            String why = describe("TomTom", e);
+            main.post(() -> { roadProblem = why; onChange.run(); });
+        }
+    }
+
+    private void fetchNominatimRoad(double lat, double lon) {
+        try {
+            String u = String.format(Locale.US, "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&extratags=1&lat=%.6f&lon=%.6f", lat, lon);
+            JSONObject o = new JSONObject(http(u, null));
+            Road found = new Road();
+            JSONObject ad = o.optJSONObject("address"), extra = o.optJSONObject("extratags");
+            if (ad != null) found.name = ad.optString("road");
+            if (extra != null && extra.has("maxspeed")) found.limit = Geo.parseMaxSpeedKmh(extra.optString("maxspeed")) / 3.6;
+            main.post(() -> { nom = found; nomAtLat = lat; nomAtLon = lon; compose(); onChange.run(); });
+        } catch (Exception e) {
+            Log.w(TAG, "nominatim " + e.getMessage());
+            String why = describe("Road lookup", e);
+            main.post(() -> { roadProblem = why; onChange.run(); });
+        }
+    }
+
     private void fetchWays(double lat, double lon, double heading, boolean valid) {
         String q = String.format(Locale.US, "[out:json][timeout:10];way(around:350,%.6f,%.6f)[highway~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$\"];out tags geom;", lat, lon);
-        for (String host : new String[]{"https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"}) {
+        String[] hosts = {"https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"};
+        for (int h = 0; h < hosts.length; h++) {
+            if (SystemClock.elapsedRealtime() < blockedUntil[h]) continue;
             try {
-                JSONArray a = new JSONObject(http(host, "data=" + URLEncoder.encode(q, "UTF-8"))).getJSONArray("elements");
+                JSONArray a = new JSONObject(http(hosts[h], "data=" + URLEncoder.encode(q, "UTF-8"))).getJSONArray("elements");
                 main.post(() -> {
                     ways = a; waysLat = lat; waysLon = lon; waysTime = SystemClock.elapsedRealtime();
                     match(lat, lon, heading, valid); onChange.run();
                 });
                 return;
-            } catch (Exception e) { Log.w(TAG, "overpass " + e.getMessage()); }
+            } catch (Exception e) {
+                Log.w(TAG, "overpass " + e.getMessage());
+                String m = String.valueOf(e.getMessage());
+                // back off hard when a server refuses us, so we do not get banned
+                long hold = m.contains("HTTP 406") || m.contains("HTTP 403") ? 3_600_000 : m.contains("HTTP 429") ? 120_000 : 30_000;
+                blockedUntil[h] = SystemClock.elapsedRealtime() + hold;
+            }
         }
     }
 
+    private static String describe(String who, Exception e) {
+        String m = String.valueOf(e.getMessage());
+        if (m.contains("HTTP 403") || m.contains("HTTP 401")) return who + ": key rejected or limit reached";
+        if (m.contains("HTTP 429")) return who + ": too many requests";
+        if (e instanceof java.net.UnknownHostException || e instanceof java.net.SocketTimeoutException) return "No internet connection";
+        return who + " failed: " + m;
+    }
+
+    private void compose() {
+        Road r = new Road();
+        r.name = !tom.name.isEmpty() ? tom.name : !osm.name.isEmpty() ? osm.name : nom.name;
+        r.limit = !Double.isNaN(tom.limit) ? tom.limit : !Double.isNaN(osm.limit) ? osm.limit : nom.limit;
+        r.lanes = osm.lanes; r.oneway = osm.oneway;
+        road = r;
+    }
+
     private void match(double lat, double lon, double heading, boolean headingValid) {
-        if (ways == null) return;
+        if (ways == null) { compose(); return; }
         JSONObject best = null; double bestScore = 55;
         for (int i = 0; i < ways.length(); i++) {
             JSONObject w = ways.optJSONObject(i);
@@ -123,7 +207,8 @@ final class RoadData {
             r.oneway = "yes".equals(t.optString("oneway")) || t.optString("highway").startsWith("motorway");
             try { r.lanes = Integer.parseInt(t.optString("lanes", "0")); } catch (NumberFormatException ignored) { }
         }
-        road = r;
+        osm = r;
+        compose();
     }
 
     private void fetchFlow(double lat, double lon, String key) {
@@ -331,6 +416,8 @@ final class RoadData {
         try {
             c.setConnectTimeout(8000); c.setReadTimeout(15000);
             c.setRequestProperty("User-Agent", UA);
+            c.setRequestProperty("Accept", "application/json,*/*");
+            c.setRequestProperty("Accept-Language", "en-US,en");
             if (form != null) {
                 c.setDoOutput(true);
                 c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
