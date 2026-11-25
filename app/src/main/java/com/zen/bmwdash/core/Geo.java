@@ -40,6 +40,25 @@ public final class Geo {
         return new double[]{best, along};
     }
 
+    /** The part of a path between two distances along it. */
+    public static double[][] slice(double[][] path, double from, double to) {
+        java.util.List<double[]> out = new java.util.ArrayList<>();
+        double run = 0;
+        for (int i = 0; i + 1 < path.length && run <= to; i++) {
+            double len = distance(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1]);
+            if (len > 0 && run + len >= from) {
+                double a = Math.max(0, (from - run) / len), b = Math.min(1, (to - run) / len);
+                if (out.isEmpty()) out.add(between(path[i], path[i + 1], a));
+                out.add(between(path[i], path[i + 1], b));
+            }
+            run += len;
+        }
+        return out.toArray(new double[0][]);
+    }
+    private static double[] between(double[] a, double[] b, double f) {
+        return new double[]{a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f};
+    }
+
     /** Smallest angle between two headings, ignoring direction of travel (0..90). */
     public static double axisDifference(double a, double b) {
         double d = Math.abs(a - b) % 180;

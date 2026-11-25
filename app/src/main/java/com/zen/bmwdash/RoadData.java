@@ -30,9 +30,10 @@ import java.util.concurrent.Executors;
  */
 final class RoadData {
     static final class Road { String name = ""; double limit = Double.NaN; int lanes; boolean oneway; }
-    static final class Weather { String summary = "", hazard; double temp = Double.NaN; }
-    static final class Incident { double lat, lon; String text; int severity; }
-    static final class Place { String name; double lat, lon; }
+    static final class Weather { String summary = "", hazard; double temp = Double.NaN, gap = 2; }
+    static final class Incident { double lat, lon; String text, title; int severity, category; }
+    static final class Camera { double lat, lon; }
+    static final class Place { String name = "", address = ""; double lat, lon, meters = Double.NaN; }
     static final class Step { double along; String text; int direction; }
     static final class Route {
         double[][] points; double meters, seconds, delay; boolean liveTraffic; String via = "";
@@ -42,7 +43,7 @@ final class RoadData {
 
     private static final String TAG = "RoadData", UA = "BMWDash/1.0 (personal Android dash app; github.com/zenchhotani/BMW-Dash)";
     private final ExecutorService roadPool = Executors.newSingleThreadExecutor(), livePool = Executors.newSingleThreadExecutor(),
-            userPool = Executors.newSingleThreadExecutor();
+            userPool = Executors.newSingleThreadExecutor(), searchPool = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Prefs prefs;
 
@@ -62,6 +63,8 @@ final class RoadData {
     double flow = Double.NaN, freeFlow = Double.NaN; // m/s
     Weather weather;
     List<Incident> incidents = new ArrayList<>();
+    List<Camera> cameras = new ArrayList<>();
+    double aheadFlow = Double.NaN; // m/s, about 800 m further on
     String trafficStatus = "";
     Runnable onChange = () -> {};
 
@@ -102,9 +105,14 @@ final class RoadData {
             if (now - flowTime > 45_000 || (moved > 400 && now - flowTime > 15_000)) {
                 flowTime = now; flowLat = lat; flowLon = lon;
                 livePool.execute(() -> fetchFlow(lat, lon, key));
+                if (headingValid) {
+                    double aLat = lat + 800 * Math.cos(Math.toRadians(heading)) / 111_320;
+                    double aLon = lon + 800 * Math.sin(Math.toRadians(heading)) / (111_320 * Math.max(0.2, Math.cos(Math.toRadians(lat))));
+                    livePool.execute(() -> fetchAhead(aLat, aLon, key));
+                } else aheadFlow = Double.NaN;
             }
             if (now - incidentTime > 120_000) { incidentTime = now; livePool.execute(() -> fetchIncidents(lat, lon, key)); }
-        } else { flow = freeFlow = Double.NaN; incidents = new ArrayList<>(); }
+        } else { flow = freeFlow = aheadFlow = Double.NaN; incidents = new ArrayList<>(); }
         if (now - weatherTime > 600_000) { weatherTime = now; livePool.execute(() -> fetchWeather(lat, lon)); }
     }
 
@@ -145,13 +153,20 @@ final class RoadData {
     }
 
     private void fetchWays(double lat, double lon, double heading, boolean valid) {
-        String q = String.format(Locale.US, "[out:json][timeout:10];way(around:350,%.6f,%.6f)[highway~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$\"];out tags geom;", lat, lon);
+        String q = String.format(Locale.US, "[out:json][timeout:10];(way(around:350,%.6f,%.6f)[highway~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$\"];node(around:1500,%.6f,%.6f)[highway=speed_camera];);out geom;", lat, lon, lat, lon);
         String[] hosts = {"https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"};
         for (int h = 0; h < hosts.length; h++) {
             if (SystemClock.elapsedRealtime() < blockedUntil[h]) continue;
             try {
                 JSONArray a = new JSONObject(http(hosts[h], "data=" + URLEncoder.encode(q, "UTF-8"))).getJSONArray("elements");
+                List<Camera> found = new ArrayList<>();
+                for (int i = 0; i < a.length(); i++) {
+                    JSONObject n = a.getJSONObject(i);
+                    if (!"node".equals(n.optString("type"))) continue;
+                    Camera c = new Camera(); c.lat = n.optDouble("lat"); c.lon = n.optDouble("lon"); found.add(c);
+                }
                 main.post(() -> {
+                    cameras = found;
                     ways = a; waysLat = lat; waysLon = lon; waysTime = SystemClock.elapsedRealtime();
                     match(lat, lon, heading, valid); onChange.run();
                 });
@@ -231,6 +246,18 @@ final class RoadData {
         }
     }
 
+    private void fetchAhead(double lat, double lon, String key) {
+        double result = Double.NaN;
+        try {
+            String u = String.format(Locale.US, "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/12/json?point=%.6f,%.6f&unit=KMPH&key=%s", lat, lon, enc(key));
+            JSONObject d = new JSONObject(http(u, null)).getJSONObject("flowSegmentData");
+            double c = d.getDouble("currentSpeed") / 3.6, f = d.getDouble("freeFlowSpeed") / 3.6;
+            if (c < f * 0.65 && d.optDouble("confidence", 1) > 0.5) result = c;
+        } catch (Exception e) { Log.w(TAG, "ahead " + e.getMessage()); }
+        double value = result;
+        main.post(() -> { aheadFlow = value; onChange.run(); });
+    }
+
     private void fetchIncidents(double lat, double lon, String key) {
         try {
             double dLat = 0.045, dLon = 0.045 / Math.max(0.2, Math.cos(Math.toRadians(lat)));
@@ -250,10 +277,30 @@ final class RoadData {
                 String from = p.optString("from");
                 if (!from.isEmpty()) in.text += " near " + from;
                 in.severity = p.optInt("magnitudeOfDelay");
+                in.category = p.optInt("iconCategory");
+                in.title = title(in.category);
                 list.add(in);
             }
             main.post(() -> { incidents = list; onChange.run(); });
         } catch (Exception e) { Log.w(TAG, "incidents " + e.getMessage()); }
+    }
+
+    private static String title(int category) {
+        switch (category) {
+            case 1: return "Accident";
+            case 2: return "Fog";
+            case 3: return "Dangerous conditions";
+            case 4: return "Heavy rain";
+            case 5: return "Ice";
+            case 6: return "Traffic jam";
+            case 7: return "Lane closed";
+            case 8: return "Road closed";
+            case 9: return "Road work";
+            case 10: return "Strong wind";
+            case 11: return "Flooding";
+            case 14: return "Broken down vehicle";
+            default: return "Road incident";
+        }
     }
 
     private void fetchWeather(double lat, double lon) {
@@ -277,46 +324,89 @@ final class RoadData {
             if (w.hazard == null && celsius <= 1.5) w.hazard = "Near freezing: watch for ice";
             if (w.hazard == null && vis < 1000) w.hazard = "Low visibility ahead";
             if (w.hazard == null && gust > 40) w.hazard = "Strong wind gusts";
+            if ((code >= 71 && code <= 77) || code == 85 || code == 86 || code == 56 || code == 57 || code == 66 || code == 67 || celsius <= 0) w.gap = 5;
+            else if (code == 45 || code == 48 || vis < 1000) w.gap = 3.5;
+            else if ((code >= 51 && code <= 65) || (code >= 80 && code <= 82) || code >= 95) w.gap = 3;
             w.summary = icon + "  " + Math.round(w.temp) + "°";
             main.post(() -> { weather = w; onChange.run(); });
         } catch (Exception e) { weatherTime = SystemClock.elapsedRealtime() - 570_000; Log.w(TAG, "weather " + e.getMessage()); }
     }
 
-    void search(String text, double lat, double lon, boolean hasFix, Done<List<Place>> done) {
-        userPool.execute(() -> {
+    private int searchSeq;
+
+    /**
+     * Places for what the driver typed or said. TomTom with a key; otherwise Photon (made for
+     * search-as-you-type) or, for nearby categories, Nominatim.
+     */
+    void search(String text, double lat, double lon, boolean hasFix, boolean category, Done<List<Place>> done) {
+        int seq = ++searchSeq;
+        searchPool.execute(() -> {
+            if (seq != searchSeq) return; // a newer keystroke is waiting
             List<Place> out = new ArrayList<>();
-            try {
-                String key = prefs.tomtomKey();
-                if (!key.isEmpty()) {
-                    try {
-                        String u = "https://api.tomtom.com/search/2/search/" + enc(text).replace("+", "%20") + ".json?limit=8&key=" + enc(key)
-                                + (hasFix ? "&lat=" + lat + "&lon=" + lon : "");
-                        JSONArray a = new JSONObject(http(u, null)).getJSONArray("results");
-                        for (int i = 0; i < a.length(); i++) {
-                            JSONObject o = a.getJSONObject(i);
-                            Place p = new Place();
-                            String poi = o.optJSONObject("poi") != null ? o.getJSONObject("poi").optString("name") : "";
-                            String addr = o.optJSONObject("address") != null ? o.getJSONObject("address").optString("freeformAddress") : "";
-                            p.name = poi.isEmpty() ? addr : poi + ", " + addr;
-                            p.lat = o.getJSONObject("position").getDouble("lat"); p.lon = o.getJSONObject("position").getDouble("lon");
-                            out.add(p);
-                        }
-                    } catch (Exception e) { Log.w(TAG, "tomtom search " + e.getMessage()); }
-                }
-                if (out.isEmpty()) {
-                    String u = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&q=" + enc(text);
-                    if (hasFix) u += String.format(Locale.US, "&viewbox=%.3f,%.3f,%.3f,%.3f", lon - 1, lat + 1, lon + 1, lat - 1);
+            boolean failed = false;
+            String key = prefs.tomtomKey();
+            if (!key.isEmpty()) {
+                try {
+                    String path = enc(text).replace("+", "%20");
+                    String u = "https://api.tomtom.com/search/2/" + (category ? "categorySearch/" : "search/") + path
+                            + ".json?limit=10&key=" + enc(key) + (category ? "&radius=30000" : "&typeahead=true")
+                            + (hasFix ? "&lat=" + lat + "&lon=" + lon : "");
+                    JSONArray a = new JSONObject(http(u, null)).getJSONArray("results");
+                    for (int i = 0; i < a.length(); i++) {
+                        JSONObject o = a.getJSONObject(i);
+                        JSONObject poi = o.optJSONObject("poi"), ad = o.optJSONObject("address");
+                        String name = poi != null ? poi.optString("name") : "";
+                        String addr = ad != null ? ad.optString("freeformAddress") : "";
+                        JSONObject pos = o.getJSONObject("position");
+                        out.add(place(name, addr, pos.getDouble("lat"), pos.getDouble("lon")));
+                    }
+                } catch (Exception e) { Log.w(TAG, "tomtom search " + e.getMessage()); }
+            }
+            if (out.isEmpty() && category && hasFix) {
+                try {
+                    String u = String.format(Locale.US, "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&bounded=1&viewbox=%.3f,%.3f,%.3f,%.3f&q=",
+                            lon - .15, lat + .12, lon + .15, lat - .12) + enc(text);
                     JSONArray a = new JSONArray(http(u, null));
                     for (int i = 0; i < a.length(); i++) {
                         JSONObject o = a.getJSONObject(i);
-                        Place p = new Place();
-                        p.name = o.getString("display_name"); p.lat = o.getDouble("lat"); p.lon = o.getDouble("lon");
-                        out.add(p);
+                        String full = o.getString("display_name"), name = o.optString("name");
+                        if (!name.isEmpty() && full.startsWith(name)) full = full.substring(name.length()).replaceFirst("^,\\s*", "");
+                        out.add(place(name, full, o.getDouble("lat"), o.getDouble("lon")));
                     }
-                }
-                main.post(() -> done.done(out));
-            } catch (Exception e) { Log.w(TAG, "search " + e.getMessage()); main.post(() -> done.done(null)); }
+                } catch (Exception e) { failed = true; Log.w(TAG, "nominatim search " + e.getMessage()); }
+            } else if (out.isEmpty()) {
+                try {
+                    String u = "https://photon.komoot.io/api/?limit=10&q=" + enc(text) + (hasFix ? "&lat=" + lat + "&lon=" + lon : "");
+                    JSONArray a = new JSONObject(http(u, null)).getJSONArray("features");
+                    for (int i = 0; i < a.length(); i++) {
+                        JSONObject f = a.getJSONObject(i), p = f.getJSONObject("properties");
+                        JSONArray c = f.getJSONObject("geometry").getJSONArray("coordinates");
+                        String street = (p.optString("housenumber") + " " + p.optString("street")).trim();
+                        StringBuilder addr = new StringBuilder();
+                        for (String part : new String[]{street, p.optString("city"), p.optString("state")}) {
+                            if (part.isEmpty()) continue;
+                            if (addr.length() > 0) addr.append(", ");
+                            addr.append(part);
+                        }
+                        out.add(place(p.optString("name"), addr.toString(), c.getDouble(1), c.getDouble(0)));
+                    }
+                } catch (Exception e) { failed = true; Log.w(TAG, "photon " + e.getMessage()); }
+            }
+            if (hasFix) {
+                for (Place p : out) p.meters = Geo.distance(lat, lon, p.lat, p.lon);
+                if (category) java.util.Collections.sort(out, (x, y) -> Double.compare(x.meters, y.meters));
+            }
+            List<Place> result = out.isEmpty() && failed ? null : out;
+            main.post(() -> { if (seq == searchSeq) done.done(result); });
         });
+    }
+
+    private static Place place(String name, String address, double lat, double lon) {
+        Place p = new Place();
+        p.name = name.isEmpty() ? address : name;
+        p.address = name.isEmpty() ? "" : address;
+        p.lat = lat; p.lon = lon;
+        return p;
     }
 
     void routes(double lat, double lon, double toLat, double toLon, Done<List<Route>> done) {
@@ -440,5 +530,5 @@ final class RoadData {
         } finally { c.disconnect(); }
     }
 
-    void close() { roadPool.shutdownNow(); livePool.shutdownNow(); userPool.shutdownNow(); }
+    void close() { roadPool.shutdownNow(); livePool.shutdownNow(); userPool.shutdownNow(); searchPool.shutdownNow(); }
 }

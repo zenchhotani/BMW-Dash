@@ -14,6 +14,12 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 - Weather hazards, loop recording with clip lock and impact lock
 - Layouts for the cover screen and the unfolded screen
 
+- Make and model of the car ahead (your own Gemini or Claude key), with estimated speed and gap
+- Collision, cut-in, pedestrian and object warnings with a full-screen alarm (the app cannot brake the car)
+- Closure, incident, slow-traffic and speed-camera warnings, plus your own police and pothole reports
+- Night view, crash prompt with one-tap 911 or text to a contact, break reminders and a trip safety score
+- Voice and live destination search, with a focused 3D guidance view
+
 ## First drive
 1. Mount the phone in landscape behind the windscreen with a clear view, where it does not block yours.
 2. While parked, tap **Aim** and line up the horizon, lane centre and hood.
@@ -27,4 +33,4 @@ single-camera estimates and get worse at night, in rain and on poorly marked roa
 
 ## Data
 OpenStreetMap contributors (Overpass, Nominatim), OpenFreeMap, OSRM, Open-Meteo, TomTom, Google MediaPipe.
-Your location is sent to these services to fetch road information.
+Your location is sent to these services to fetch road information. If you add an AI key, pictures of the car ahead are sent to that provider. Search text goes to TomTom, Photon or Nominatim.

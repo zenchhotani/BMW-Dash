@@ -14,10 +14,19 @@ public final class Track {
     /** metres/second, positive = gap opening */
     public float rangeRate = Float.NaN;
     public boolean lead;
+    /** metres right of our axis, NaN when unknown */
+    public float lateral = Float.NaN;
     final ArrayDeque<float[]> history = new ArrayDeque<>();
 
     public boolean isVehicle() {
         return label.equals("car") || label.equals("truck") || label.equals("bus") || label.equals("motorcycle");
+    }
+    public boolean isAnimal() {
+        return label.equals("dog") || label.equals("cat") || label.equals("horse") || label.equals("cow")
+                || label.equals("sheep") || label.equals("bear");
+    }
+    public boolean isObstacle() {
+        return label.equals("suitcase") || label.equals("chair") || label.equals("backpack") || label.equals("bench");
     }
     public float cx() { return (left + right) / 2f; }
 }

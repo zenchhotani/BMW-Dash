@@ -62,7 +62,22 @@ public class CoreTest {
         check("distance", Math.abs(l.distance - 15) < 2.5);
         check("rate", Math.abs(l.rangeRate + 5) < 1.2);
         Advisor.Input in = new Advisor.Input(); in.speed = 20; in.lead = l; l.distance = 12; l.rangeRate = -6;
-        check("brake", Advisor.advise(in).level == Advisor.DANGER);
+        Safety safe = new Safety(); Safety.Event ev = null; l.hits = 20;
+        for (int t = 0; t <= 600; t += 100) { Safety.Input si = new Safety.Input(); si.t = t; si.speed = 20; si.seeing = true; si.tracks = List.of(l); ev = safe.update(si); }
+        check("brake", ev != null && ev.code.equals("brake") && ev.level == Advisor.DANGER);
+        l.rangeRate = 0; l.distance = 40;
+        for (int t = 5000; t <= 8000; t += 100) { Safety.Input si = new Safety.Input(); si.t = t; si.speed = 20; si.seeing = true; si.tracks = List.of(l); ev = safe.update(si); }
+        check("quiet when steady", ev == null);
+        Safety s2 = new Safety(); l.distance = 6;
+        for (int t = 0; t <= 9000; t += 100) { Safety.Input si = new Safety.Input(); si.t = t; si.speed = 0; si.seeing = true; si.tracks = List.of(l); l.distance = t < 6000 ? 6 : 11; ev = s2.update(si); if (ev != null) break; }
+        check("traffic moving", ev != null && ev.code.equals("go"));
+        Track person = new Track(); person.label = "person"; person.hits = 5; person.distance = 12; person.lateral = .3f;
+        Safety.Input pi = new Safety.Input(); pi.t = 100; pi.speed = 12; pi.seeing = true; pi.tracks = List.of(person);
+        ev = new Safety().update(pi); check("person in path", ev != null && ev.level == Advisor.DANGER);
+        int[] red = new int[600]; java.util.Arrays.fill(red, 0xFF202020); for (int i = 0; i < 40; i++) red[i] = 0xFFFF2010;
+        check("red light", SignalColor.classify(red) == SignalColor.RED && SignalColor.classify(new int[600]) == SignalColor.NONE);
+        double[][] cut = Geo.slice(new double[][]{{40,-75},{40.01,-75}}, 100, 200);
+        check("slice", cut.length == 2 && Math.abs(Geo.distance(cut[0][0],cut[0][1],cut[1][0],cut[1][1]) - 100) < 1);
         check("tomtom limit", Math.abs(Geo.parseMaxSpeedKmh("35.00mph") - 56.33) < .1);
         check("mph", Math.abs(Geo.parseMaxSpeedKmh("55 mph") - 88.5) < .1 && Double.isNaN(Geo.parseMaxSpeedKmh("signals")));
         double[] p = Geo.project(new double[][]{{40,-75},{40.01,-75}}, 40.005, -75.0001);

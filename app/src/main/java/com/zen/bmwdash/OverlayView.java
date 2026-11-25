@@ -24,6 +24,7 @@ final class OverlayView extends View {
     private LaneState lane;
     private int frameW = 16, frameH = 9;
     private double ego;
+    String leadName = "";
     private boolean mph = true, calibrating;
     private float horizon = .5f, center = .5f, hood = .88f;
 
@@ -122,6 +123,7 @@ final class OverlayView extends View {
                 if (ego > 3 && other > -2) s += "  •  " + Ui.speed(Math.max(0, other), mph) + " " + Ui.unit(mph);
             }
         }
+        if (t.lead && !leadName.isEmpty()) s = leadName + "  \u2022  " + s;
         p.setTextSize((t.lead ? 15 : 11) * d); p.setTypeface(Typeface.DEFAULT_BOLD); p.setStyle(Paint.Style.FILL);
         float tw = p.measureText(s), pad = 6 * d, th = p.getTextSize() + pad;
         float x = Math.max(0, Math.min(r.centerX() - tw / 2 - pad, getWidth() - tw - 2 * pad)), y = Math.max(0, r.top - th - 4 * d);

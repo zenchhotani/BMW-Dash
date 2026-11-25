@@ -13,6 +13,8 @@ public final class Advisor {
         public double turnMeters = Double.NaN;
         public String weather; // short hazard text or null
         public String incident; // nearby incident text or null
+        public double safeGap = 2; // seconds, longer in bad weather
+        public double aheadFlow = Double.NaN; // live traffic speed further up the road
     }
 
     public static final class Advice {
@@ -23,14 +25,9 @@ public final class Advisor {
     public static Advice advise(Input in) {
         boolean moving = in.speed > 4;
         Track l = in.lead;
-        if (l != null && !Float.isNaN(l.distance) && moving) {
-            double closing = Float.isNaN(l.rangeRate) ? 0 : -l.rangeRate;
-            double ttc = closing > 1.5 ? l.distance / closing : Double.MAX_VALUE;
-            if (ttc < 2.8 && l.distance < 45) return new Advice(DANGER, "BRAKE: closing fast on the car ahead", "Brake");
-        }
         if (in.laneType == LaneState.LaneType.YELLOW_ON_RIGHT && moving)
             return new Advice(DANGER, "CHECK LANE: yellow line on your right", "Check your lane");
-        if (l != null && !Float.isNaN(l.distance) && in.speed > 9 && l.distance / in.speed < 1.2)
+        if (l != null && !Float.isNaN(l.distance) && in.speed > 9 && l.distance / in.speed < in.safeGap * 0.55)
             return new Advice(WARN, "Too close: leave more room", "Too close");
         if (in.laneDeparture && in.speed > 13) return new Advice(WARN, "Drifting out of lane", "Lane departure");
         if (in.turnDirection != 0 && in.turnMeters < 900) {
@@ -41,12 +38,14 @@ public final class Advisor {
         }
         if (!Double.isNaN(in.limit) && in.speed > in.limit + 4.5)
             return new Advice(WARN, "Over the speed limit", "Check your speed");
+        if (!Double.isNaN(in.aheadFlow) && in.speed > in.aheadFlow + 9)
+            return new Advice(WARN, "Traffic is slow ahead: ease off now", "Slow traffic ahead");
         if (in.incident != null) return new Advice(INFO, in.incident, null);
         if (!Double.isNaN(in.flow) && !Double.isNaN(in.freeFlow) && in.flow < in.freeFlow * 0.6)
             return new Advice(WARN, "Slow traffic on this road", "Slow traffic");
         if (in.weather != null) return new Advice(INFO, in.weather, null);
-        if (l != null && !Float.isNaN(l.distance) && moving && l.distance / Math.max(in.speed, 1) < 2)
-            return new Advice(INFO, "Following: ease back to a 2 second gap", null);
+        if (l != null && !Float.isNaN(l.distance) && moving && l.distance / Math.max(in.speed, 1) < in.safeGap)
+            return new Advice(INFO, "Ease back to a " + Math.round(in.safeGap) + " second gap", null);
         return new Advice(GOOD, moving ? "Road looks clear. Drive smoothly." : "Ready when you are.", null);
     }
 }

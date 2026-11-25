@@ -18,6 +18,8 @@ import org.maplibre.android.maps.MapLibreMapOptions;
 import org.maplibre.android.maps.MapView;
 import org.maplibre.android.maps.Style;
 import org.maplibre.android.style.layers.CircleLayer;
+import org.maplibre.android.style.layers.FillExtrusionLayer;
+import org.maplibre.android.style.expressions.Expression;
 import org.maplibre.android.style.layers.LineLayer;
 import org.maplibre.android.style.layers.Property;
 import org.maplibre.android.style.layers.PropertyFactory;
@@ -47,6 +49,9 @@ final class MapPanel extends FrameLayout {
     private List<RoadData.Incident> incidents = new ArrayList<>();
     private double[] destination;
     Pick pick;
+    private boolean navigating;
+    private double turnMeters = Double.NaN;
+    private double[][] turn = new double[0][];
 
     MapPanel(Context c, Prefs p, Bundle state) {
         super(c);
@@ -95,6 +100,17 @@ final class MapPanel extends FrameLayout {
                 r.setProperties(PropertyFactory.rasterOpacity(0.85f));
                 s.addLayer(r);
             }
+            if (s.getSource("openmaptiles") != null) {
+                FillExtrusionLayer b = new FillExtrusionLayer("dash-3d", "openmaptiles");
+                b.setSourceLayer("building");
+                b.setMinZoom(14f);
+                b.setProperties(PropertyFactory.fillExtrusionColor(Color.parseColor(prefs.mapDark() ? "#3B4A73" : "#C9CFDD")),
+                        PropertyFactory.fillExtrusionHeight(Expression.get("render_height")),
+                        PropertyFactory.fillExtrusionBase(Expression.get("render_min_height")),
+                        PropertyFactory.fillExtrusionOpacity(0.75f));
+                s.addLayer(b);
+            }
+            s.addSource(new GeoJsonSource("turn"));
             s.addSource(new GeoJsonSource("alt"));
             s.addSource(new GeoJsonSource("route"));
             s.addSource(new GeoJsonSource("incidents"));
@@ -103,6 +119,8 @@ final class MapPanel extends FrameLayout {
             s.addLayer(line("alt", "alt", Color.parseColor("#7C89A8"), 6f));
             s.addLayer(line("routeGlow", "route", Color.parseColor("#661C9BFF"), 15f));
             s.addLayer(line("route", "route", Color.parseColor("#35F0E0"), 6f));
+            s.addLayer(line("turnGlow", "turn", Color.parseColor("#667A5CFF"), 22f));
+            s.addLayer(line("turn", "turn", Color.WHITE, 8f));
             s.addLayer(dot("incidents", "incidents", "#FF3B5C", 7f));
             s.addLayer(dot("dest", "dest", "#7A5CFF", 11f));
             s.addLayer(dot("carGlow", "car", "#1C9BFF", 22f).withProperties(PropertyFactory.circleOpacity(0.28f), PropertyFactory.circleStrokeWidth(0f)));
@@ -134,7 +152,15 @@ final class MapPanel extends FrameLayout {
 
     private CameraPosition camera() {
         double zoom = speed > 25 ? 15 : speed > 13 ? 15.8 : 16.6;
-        return new CameraPosition.Builder().target(new LatLng(lat, lon)).zoom(zoom).bearing(bearing).tilt(50).build();
+        double tilt = 50, top = 0;
+        if (navigating) {
+            // chase view: car low on the screen, closer in as a turn approaches
+            zoom = !Double.isNaN(turnMeters) && turnMeters < 220 ? 17.8 : speed > 25 ? 15.8 : speed > 13 ? 16.5 : 17.2;
+            tilt = 60;
+            top = getHeight() * 0.38;
+        }
+        return new CameraPosition.Builder().target(new LatLng(lat, lon)).zoom(zoom).bearing(bearing).tilt(tilt)
+                .padding(0, top, 0, 0).build();
     }
     private void move() { if (map != null && hasFix) map.animateCamera(CameraUpdateFactory.newCameraPosition(camera()), 900); }
 
@@ -152,6 +178,22 @@ final class MapPanel extends FrameLayout {
             try { map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), Ui.dp(getContext(), 46)), 900); }
             catch (Exception ignored) { }
         }
+    }
+
+    void navigation(boolean on) {
+        if (navigating == on) return;
+        navigating = on;
+        if (!on) { turn = new double[0][]; turnMeters = Double.NaN; set("turn", lines(new ArrayList<>())); }
+        if (follow) move();
+    }
+
+    /** highlights the stretch of road where the next turn happens */
+    void nextTurn(double[][] stretch, double meters) {
+        turnMeters = meters;
+        turn = stretch;
+        List<double[][]> l = new ArrayList<>();
+        if (stretch.length > 1) l.add(stretch);
+        set("turn", lines(l));
     }
 
     void followCar() { follow = true; showRecenter(); move(); }

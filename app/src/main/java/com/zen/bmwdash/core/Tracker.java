@@ -59,7 +59,16 @@ public final class Tracker {
         tr.left += k * (d.left - tr.left); tr.top += k * (d.top - tr.top);
         tr.right += k * (d.right - tr.right); tr.bottom += k * (d.bottom - tr.bottom);
         tr.score = d.score; tr.label = d.label; tr.lastSeen = t; tr.hits++;
-        if (!tr.isVehicle()) return;
+        if (!tr.isVehicle()) {
+            // people, animals and objects: flat-road range from where they touch the ground
+            float dy = (tr.bottom - horizon) * aspect;
+            if (dy > 0.012f && tr.bottom < 0.9f) {
+                float g = focal * cameraHeight / dy;
+                tr.distance = Float.isNaN(tr.distance) ? g : tr.distance + 0.4f * (g - tr.distance);
+                tr.lateral = (tr.cx() - center) * tr.distance / focal;
+            } else { tr.distance = Float.NaN; tr.lateral = Float.NaN; }
+            return;
+        }
         float m = range(tr);
         if (Float.isNaN(m)) return;
         tr.distance = Float.isNaN(tr.distance) ? m : tr.distance + 0.35f * (m - tr.distance);
@@ -120,7 +129,7 @@ public final class Tracker {
         Track c = new Track();
         c.id = s.id; c.label = s.label; c.score = s.score; c.left = s.left; c.top = s.top;
         c.right = s.right; c.bottom = s.bottom; c.firstSeen = s.firstSeen; c.lastSeen = s.lastSeen;
-        c.hits = s.hits; c.distance = s.distance; c.rangeRate = s.rangeRate; c.lead = s.lead;
+        c.hits = s.hits; c.distance = s.distance; c.rangeRate = s.rangeRate; c.lead = s.lead; c.lateral = s.lateral;
         return c;
     }
 

@@ -50,6 +50,7 @@ import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
 import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.SignalColor;
 import com.zen.bmwdash.core.Track;
 import com.zen.bmwdash.core.Tracker;
 
@@ -71,12 +72,17 @@ final class CameraEngine {
         void onVision(List<Track> tracks, LaneState lane, int w, int h, int fps);
         void onRecording(boolean recording, long seconds, boolean locked);
         void onError(String message);
+        void onScene(int light, float brightness);
+        /** ask first: is a picture of this lead car wanted? */
+        boolean wantsCar(int id, int widthPx);
+        void onCarPicture(int id, Bitmap crop, int widthPx);
     }
 
     private static final String TAG = "CameraEngine", FOLDER = "Movies/BMWDash";
     private static final long SEGMENT_MS = 120_000;
     private static final Set<String> WANTED = new HashSet<>(Arrays.asList(
-            "car", "truck", "bus", "motorcycle", "bicycle", "person", "traffic light", "stop sign"));
+            "car", "truck", "bus", "motorcycle", "bicycle", "person", "traffic light", "stop sign",
+            "dog", "cat", "horse", "cow", "sheep", "bear", "suitcase", "chair", "backpack", "bench"));
 
     private final Context ctx;
     private final Prefs prefs;
@@ -93,6 +99,12 @@ final class CameraEngine {
     private VideoCapture<Recorder> video;
     private Recording recording;
     private volatile float focalOverLong = 0.65f;
+    private volatile boolean enhance;
+    private volatile int maxBoost;
+    private Camera boundCamera;
+    private float brightness = 128;
+    private static final int[] LUT = new int[256];
+    static { for (int i = 0; i < 256; i++) LUT[i] = (int) Math.round(255 * Math.pow(i / 255.0, 0.55)); }
     private boolean wantRecording, lockCurrent, closed, paused;
     private long frameCount, fpsStart;
     private int fps, fpsFrames;
@@ -149,6 +161,8 @@ final class CameraEngine {
             camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis);
             listener.onError("This camera cannot record and analyse together. Recording is off.");
         }
+        boundCamera = camera;
+        applyExposure();
         try {
             Camera2CameraInfo info = Camera2CameraInfo.from(camera.getCameraInfo());
             float[] f = info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
@@ -165,6 +179,30 @@ final class CameraEngine {
         if (video != null) video.setTargetRotation(rotation);
     }
 
+    /** Night mode: lift exposure a little and brighten what the AI and lane finder see. */
+    void setNight(boolean on) {
+        if (enhance == on) return;
+        enhance = on;
+        applyExposure();
+    }
+    private void applyExposure() {
+        if (boundCamera == null) return;
+        androidx.camera.core.ExposureState e = boundCamera.getCameraInfo().getExposureState();
+        if (!e.isExposureCompensationSupported()) return;
+        float step = e.getExposureCompensationStep().floatValue();
+        int index = enhance && step > 0 ? Math.min(e.getExposureCompensationRange().getUpper(), Math.round(0.7f / step)) : 0;
+        boundCamera.getCameraControl().setExposureCompensationIndex(index);
+    }
+
+    private static Bitmap brighten(Bitmap src) {
+        Bitmap out = Bitmap.createBitmap(src.getWidth(), src.getHeight(), Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColorFilter(new android.graphics.ColorMatrixColorFilter(new float[]{
+                1.6f, 0, 0, 0, 14, 0, 1.6f, 0, 0, 14, 0, 0, 1.6f, 0, 14, 0, 0, 0, 1, 0}));
+        new android.graphics.Canvas(out).drawBitmap(src, 0, 0, paint);
+        return out;
+    }
+
     private void analyze(ImageProxy image) {
         Bitmap frame = null;
         try {
@@ -179,14 +217,15 @@ final class CameraEngine {
             long t = SystemClock.elapsedRealtime();
             float horizon = prefs.horizon(), center = prefs.center(), hood = prefs.hood();
 
+            Bitmap seen = enhance ? brighten(frame) : frame;
             // every other frame zooms into the road ahead so distant cars are found too
             List<Detection> dets = new ArrayList<>();
-            if ((frameCount++ & 1) == 0) detect(frame, 0, 0, w, h, w, h, dets);
+            if ((frameCount++ & 1) == 0) detect(seen, 0, 0, w, h, w, h, dets);
             else {
                 int cw = w / 2, ch = h / 2;
                 int cx = clamp(Math.round(center * w) - cw / 2, 0, w - cw);
                 int cy = clamp(Math.round(horizon * h) - ch * 2 / 5, 0, h - ch);
-                Bitmap crop = Bitmap.createBitmap(frame, cx, cy, cw, ch);
+                Bitmap crop = Bitmap.createBitmap(seen, cx, cy, cw, ch);
                 detect(crop, cx, cy, cw, ch, w, h, dets);
                 crop.recycle();
             }
@@ -200,20 +239,53 @@ final class CameraEngine {
             tiny.getPixels(px, 0, lw, 0, 0, lw, lh);
             if (tiny != frame) tiny.recycle();
             int[] gray = new int[px.length];
+            long sum = 0;
             boolean[] yellow = new boolean[px.length];
             for (int i = 0; i < px.length; i++) {
                 int r = (px[i] >> 16) & 255, g = (px[i] >> 8) & 255, b = px[i] & 255;
-                gray[i] = (r * 77 + g * 150 + b * 29) >> 8;
+                int lum = (r * 77 + g * 150 + b * 29) >> 8;
+                sum += lum;
+                gray[i] = enhance ? LUT[lum] : lum;
                 yellow[i] = r > 90 && g > 70 && r - b > 40 && g - b > 25 && r >= g - 10 && r - g < 80;
             }
             LaneDetector.Result res = laneDetector.detect(gray, yellow, lw, lh, horizon, hood, center);
             laneState.update(res, t, center, hood);
             List<Track> tracks = tracker.update(dets, t, laneState);
 
+            brightness += 0.05f * (sum / (float) px.length - brightness);
+
+            // the biggest traffic light near the middle of the road
+            Track signal = null, ahead = null;
+            for (Track k : tracks) {
+                if (k.lead) ahead = k;
+                if (k.label.equals("traffic light") && k.cx() > 0.25f && k.cx() < 0.75f && (k.right - k.left) * w >= 9
+                        && (signal == null || k.right - k.left > signal.right - signal.left)) signal = k;
+            }
+            int light = SignalColor.NONE;
+            if (signal != null) {
+                int x = clamp((int) (signal.left * w), 0, w - 2), y = clamp((int) (signal.top * h), 0, h - 2);
+                int bw = clamp((int) ((signal.right - signal.left) * w), 1, w - x), bh = clamp((int) ((signal.bottom - signal.top) * h), 1, h - y);
+                int[] lp = new int[bw * bh];
+                frame.getPixels(lp, 0, bw, x, y, bw, bh);
+                light = SignalColor.classify(lp);
+            }
+            if (ahead != null && ahead.hits >= 5) {
+                float bw = ahead.right - ahead.left, bh = ahead.bottom - ahead.top;
+                int x = clamp((int) ((ahead.left - bw * 0.08f) * w), 0, w - 2), y = clamp((int) ((ahead.top - bh * 0.08f) * h), 0, h - 2);
+                int pw = clamp((int) (bw * 1.16f * w), 1, w - x), ph = clamp((int) (bh * 1.16f * h), 1, h - y);
+                int carPx = (int) (bw * w);
+                if (listener.wantsCar(ahead.id, carPx)) {
+                    Bitmap cut = Bitmap.createBitmap(seen, x, y, pw, ph).copy(Bitmap.Config.ARGB_8888, false);
+                    final int id = ahead.id;
+                    main.post(() -> { if (!closed) listener.onCarPicture(id, cut, carPx); });
+                }
+            }
+
             fpsFrames++;
             if (t - fpsStart >= 1000) { fps = (int) Math.round(fpsFrames * 1000.0 / (t - fpsStart)); fpsFrames = 0; fpsStart = t; }
-            final int fw = w, fh = h, rate = fps;
-            main.post(() -> { if (!closed) listener.onVision(tracks, laneState, fw, fh, rate); });
+            final int fw = w, fh = h, rate = fps, signalNow = light;
+            final float bright = brightness;
+            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright); listener.onVision(tracks, laneState, fw, fh, rate); } });
         } catch (Exception e) {
             Log.e(TAG, "analyze", e);
         } finally {

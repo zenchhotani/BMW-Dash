@@ -56,6 +56,12 @@ import androidx.activity.OnBackPressedCallback;
 import com.zen.bmwdash.core.Advisor;
 import com.zen.bmwdash.core.Geo;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.Safety;
+import android.graphics.Bitmap;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import java.util.HashSet;
+import java.util.Set;
 import com.zen.bmwdash.core.Track;
 
 import java.text.SimpleDateFormat;
@@ -76,7 +82,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private FrameLayout cameraPane, mapPane;
     private LinearLayout root, side;
     private TextView roadChip, weatherChip, recChip, adviceBar, turnBar, visionChip, etaChip, trafficButton;
-    private HorizontalScrollView routeScroll;
+    private HorizontalScrollView routeScroll, buttonScroll;
+    private SearchPanel searchPanel;
+    private long showButtonsUntil;
+    private boolean navShown;
     private LinearLayout routeRow;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -97,6 +106,18 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private int selected, offRoute;
     private double[] destination;
     private int lastLevel = -1;
+    private final Safety safety = new Safety();
+    private CarId carId;
+    private AlarmView alarm;
+    private TextView carCard, nightButton;
+    private List<Track> tracks = new ArrayList<>();
+    private int light, nightShown = -1, speedLeadId = -1;
+    private float brightness = 128;
+    private boolean autoDark;
+    private double theirSpeed = Double.NaN, recentSpeed;
+    private long recentSpeedAt, lastBuzz;
+    private final Set<String> announced = new HashSet<>();
+    private AlertDialog sos;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -105,6 +126,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         prefs = new Prefs(this);
         data = new RoadData(prefs);
         data.onChange = this::refresh;
+        carId = new CarId(prefs);
         locations = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         sensors = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         tts = new TextToSpeech(this, s -> {
@@ -199,6 +221,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         visionChip = Ui.text(this, "AI starting…", 10, Ui.DIM, true);
         visionChip.setPadding(dp(8), dp(4), dp(8), 0);
         top.addView(visionChip);
+        carCard = chip("", Ui.GREEN);
+        carCard.setTextSize(15);
+        carCard.setVisibility(View.GONE);
+        LinearLayout.LayoutParams cc = new LinearLayout.LayoutParams(-2, -2);
+        cc.topMargin = dp(6);
+        top.addView(carCard, cc);
         FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         topLp.setMargins(dp(8), dp(8), dp(8), 0);
         cameraPane.addView(top, topLp);
@@ -212,7 +240,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         LinearLayout buttons = new LinearLayout(this);
         buttons.addView(Ui.button(this, "● Rec", Ui.RED, () -> { if (camera != null) camera.toggleRecording(); }));
         buttons.addView(Ui.button(this, "🔒 Lock", Ui.AMBER, () -> lockClip("Clip locked")), margins(-2, -2, 6));
-        buttons.addView(Ui.button(this, "🔍 Go to", Ui.CYAN, this::searchDialog), margins(-2, -2, 6));
+        buttons.addView(Ui.button(this, "🔍 Go to", Ui.CYAN, this::openSearch), margins(-2, -2, 6));
         trafficButton = Ui.button(this, "🚦 Traffic", Ui.GREEN, () -> {
             if (prefs.tomtomKey().isEmpty()) { toast("Add your free TomTom key in Setup"); settingsDialog(); return; }
             prefs.edit().putBoolean("traffic", !prefs.mapTraffic()).apply();
@@ -222,12 +250,20 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         buttons.addView(trafficButton, margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "⌖ Aim", Ui.VIOLET, () -> calibrate(!calibrating)), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "⚙ Setup", Ui.BLUE, this::settingsDialog), margins(-2, -2, 6));
+        nightButton = Ui.button(this, "\uD83C\uDF19 Auto", Ui.VIOLET, this::cycleNight);
+        buttons.addView(nightButton, margins(-2, -2, 6));
+        buttons.addView(Ui.button(this, "\u26A0 Report", Ui.AMBER, this::reportDialog), margins(-2, -2, 6));
+        buttons.addView(Ui.button(this, "\uD83D\uDCCA Trip", Ui.GREEN, this::tripDialog), margins(-2, -2, 6));
+        buttons.addView(Ui.button(this, "\uD83C\uDD98 SOS", Ui.RED, () -> sosDialog(false)), margins(-2, -2, 6));
         HorizontalScrollView bs = new HorizontalScrollView(this);
         bs.setHorizontalScrollBarEnabled(false);
         bs.addView(buttons);
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
         blp.topMargin = dp(6);
         bottom.addView(bs, blp);
+        buttonScroll = bs;
+        // while guiding, buttons tuck away; touching the camera picture brings them back
+        overlay.setOnClickListener(v -> { showButtonsUntil = SystemClock.elapsedRealtime() + 8000; refresh(); });
         FrameLayout.LayoutParams botLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         botLp.setMargins(dp(8), 0, dp(8), dp(8));
         cameraPane.addView(bottom, botLp);
@@ -262,8 +298,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             v.setPadding(i.left, i.top, i.right, i.bottom);
             return in;
         });
-        setContentView(root);
+        FrameLayout screen = new FrameLayout(this);
+        screen.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        alarm = new AlarmView(this);
+        screen.addView(alarm, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(screen);
         arrange();
+        showNightLabel();
     }
 
     /** Cover screen and landscape: side by side. Unfolded square or portrait: stacked. */
@@ -286,6 +327,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             root.addView(gauges, weighted(-1, 0, square ? .52f : .62f, gap));
             root.addView(mapPane, weighted(-1, 0, square ? .8f : 1f, gap));
         }
+        weights();
         immersive();
         ViewCompat.requestApplyInsets(root);
     }
@@ -373,6 +415,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         }
         if (v < 0.7) v = 0;
         speed = v;
+        if (v > 5) { recentSpeed = v; recentSpeedAt = now; }
         if (l.hasBearing() && v > 2) { heading = l.getBearing(); headingValid = true; }
         last = l;
         lastFixTime = now;
@@ -385,15 +428,40 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     @Override public void onProviderDisabled(@NonNull String p) { toast("Location is off"); }
     @Override @SuppressWarnings("deprecation") public void onStatusChanged(String p, int s, Bundle b) { }
 
-    @Override public void onVision(List<Track> tracks, LaneState l, int w, int h, int fps) {
+    @Override public void onScene(int signal, float bright) {
+        light = signal;
+        brightness = bright;
+        // hysteresis so auto night view does not flicker under street lamps
+        if (bright < 55) autoDark = true; else if (bright > 80) autoDark = false;
+        applyNight();
+    }
+
+    @Override public boolean wantsCar(int id, int widthPx) { return carId.wants(id, widthPx); }
+
+    @Override public void onCarPicture(int id, Bitmap crop, int widthPx) {
+        carId.identify(id, crop, widthPx, (car, r) -> {
+            if (!r.emergency.equals("none") && lead != null && lead.id == car && announced.add("em" + car)) {
+                String who = r.emergency.equals("police") ? "Police vehicle" : r.emergency.equals("ambulance") ? "Ambulance" : "Fire vehicle";
+                toast(who + " ahead");
+                if (prefs.voice()) say(who + " ahead");
+            }
+            refresh();
+        });
+    }
+
+    @Override public void onVision(List<Track> seen, LaneState l, int w, int h, int fps) {
         lane = l;
+        tracks = seen;
+        CarId.Result known = null;
+        for (Track t : seen) if (t.lead) known = carId.get(t.id);
+        overlay.leadName = known == null ? "" : known.label();
         lead = null;
         int cars = 0;
-        for (Track t : tracks) { if (t.lead) lead = t; if (t.isVehicle()) cars++; }
+        for (Track t : seen) { if (t.lead) lead = t; if (t.isVehicle()) cars++; }
         lastVision = SystemClock.elapsedRealtime();
         overlay.calibration(calibrating, prefs.horizon(), prefs.center(), prefs.hood());
         // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
-        overlay.show(tracks, moving() || calibrating ? l : null, w, h, speed, prefs.mph());
+        overlay.show(seen, moving() || calibrating ? l : null, w, h, speed, prefs.mph());
         visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
         visionChip.setTextColor(Ui.CYAN);
         refresh();
@@ -427,6 +495,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
                 : lane.position == LaneState.Position.DRIFT_LEFT ? "DRIFT LEFT" : "DRIFT RIGHT";
         gauges.laneLabel = where.isEmpty() ? how : laneKnown && lane.position != LaneState.Position.CENTERED ? how : where;
         gauges.invalidate();
+        applyNight();
 
         String name = road.name;
         if (name.isEmpty()) {
@@ -446,50 +515,200 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         in.laneDeparture = seeing && moving() && lane != null && lane.departing;
         in.laneType = type;
         if (data.weather != null) in.weather = data.weather.hazard;
-        in.incident = nearbyIncident();
+        in.incident = hazardAhead();
+        if (data.weather != null) in.safeGap = data.weather.gap;
+        in.aheadFlow = data.aheadFlow;
         if (!data.trafficStatus.isEmpty()) in.incident = data.trafficStatus;
         guidance(in, fresh);
-        show(Advisor.advise(in), now);
-    }
-
-    private String nearbyIncident() {
-        if (last == null) return null;
-        RoadData.Incident best = null; double bd = 1500;
-        for (RoadData.Incident i : data.incidents) {
-            double d = Geo.distance(last.getLatitude(), last.getLongitude(), i.lat, i.lon);
-            boolean ahead = true;
-            if (headingValid && d > 80) {
-                double b = Geo.bearing(last.getLatitude(), last.getLongitude(), i.lat, i.lon);
-                ahead = Math.abs(((b - heading + 540) % 360) - 180) < 45;
+        driveFocus();
+        Safety.Input s = new Safety.Input();
+        s.t = now; s.speed = speed; s.seeing = seeing; s.tracks = tracks; s.limit = road.limit;
+        s.safeGap = in.safeGap; s.light = seeing ? light : 0;
+        Safety.Event event = safety.update(s);
+        Advisor.Advice advice = Advisor.advise(in);
+        if (event != null && event.level >= advice.level) {
+            String text = event.text;
+            if (event.code.equals("limit") && !Double.isNaN(road.limit))
+                text = "Speed limit now " + Ui.speed(road.limit, prefs.mph()) + " " + Ui.unit(prefs.mph());
+            show(event.level, text, event.speak, true, now);
+        } else show(advice.level, advice.text, advice.speak, advice.level >= Advisor.WARN, now);
+        boolean urgent = event != null && event.level == Advisor.DANGER;
+        if (urgent) {
+            alarm.show(event.code.equals("brake") ? "BRAKE!" : "STOP!");
+            if (now - lastBuzz > 900) {
+                lastBuzz = now;
+                Vibrator v = getSystemService(Vibrator.class);
+                if (v != null) v.vibrate(VibrationEffect.createWaveform(new long[]{0, 250, 90, 250}, -1));
+                if (tone != null) tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 700);
             }
-            if (ahead && d < bd) { bd = d; best = i; }
-        }
-        map.incidents(data.incidents);
-        return best == null ? null : "⚠ " + Ui.distance(bd, prefs.mph()) + ": " + best.text;
+        } else alarm.hide();
+        carCard(seeing, fresh);
     }
 
-    private void show(Advisor.Advice a, long now) {
-        adviceBar.setText(a.text);
-        if (a.level != lastLevel) {
-            int col = a.level == Advisor.DANGER ? Ui.RED : a.level == Advisor.WARN ? Ui.AMBER : a.level == Advisor.GOOD ? Ui.GREEN : Ui.BLUE;
+    private void carCard(boolean seeing, boolean fresh) {
+        if (!seeing || lead == null || Float.isNaN(lead.distance)) { carCard.setVisibility(View.GONE); speedLeadId = -1; return; }
+        if (lead.id != speedLeadId) { speedLeadId = lead.id; theirSpeed = Double.NaN; }
+        if (fresh && !Float.isNaN(lead.rangeRate)) {
+            double v = Math.max(0, speed + lead.rangeRate);
+            theirSpeed = Double.isNaN(theirSpeed) ? v : theirSpeed + 0.2 * (v - theirSpeed);
+        }
+        CarId.Result r = carId.get(lead.id);
+        String name = r != null ? r.label() : prefs.aiKey().isEmpty() ? "Car ahead (add AI key for make and model)"
+                : !carId.problem.isEmpty() ? "Car ahead (" + carId.problem + ")" : "Identifying car ahead\u2026";
+        if (r != null && r.emergency.equals("police")) name = "\uD83D\uDE93 Police  \u2022  " + name;
+        String info = (Double.isNaN(theirSpeed) || !fresh ? "speed --" : "\u2248 " + Ui.speed(theirSpeed, prefs.mph()) + " " + Ui.unit(prefs.mph()))
+                + "   \u2022   " + Ui.range(lead.distance, prefs.mph())
+                + (speed > 3 ? String.format(Locale.US, "   \u2022   %.1f s gap", lead.distance / speed) : "");
+        carCard.setText("\uD83D\uDE98 " + name + "\n" + info);
+        carCard.setVisibility(View.VISIBLE);
+    }
+
+    /** Closest closure, incident, speed camera or saved report in front of us; speaks each one once. */
+    private String hazardAhead() {
+        map.incidents(data.incidents);
+        if (last == null) return null;
+        double best = 1e9;
+        String text = null, key = null, spoken = null;
+        for (RoadData.Incident i : data.incidents) {
+            double d = ahead(i.lat, i.lon, 1600);
+            // closures and accidents outrank nearer but minor items
+            double rank = d - (i.category == 8 || i.category == 1 ? 700 : 0);
+            if (d >= 0 && rank < best) {
+                best = rank; key = "i" + i.title + Math.round(i.lat * 500) + "," + Math.round(i.lon * 500);
+                text = "\u26A0 " + i.title + " in " + Ui.distance(d, prefs.mph()) + ": " + i.text; spoken = i.title + " ahead";
+            }
+        }
+        for (RoadData.Camera c : data.cameras) {
+            double d = ahead(c.lat, c.lon, 600);
+            if (d >= 0 && d < best) {
+                best = d; key = "c" + c.lat + "," + c.lon;
+                text = "\uD83D\uDCF7 Speed camera in " + Ui.distance(d, prefs.mph()); spoken = "Speed camera ahead";
+            }
+        }
+        for (String[] m : reports()) {
+            double lat = Double.parseDouble(m[1]), lon = Double.parseDouble(m[2]);
+            double d = ahead(lat, lon, 900);
+            if (d >= 0 && d < best && System.currentTimeMillis() - Long.parseLong(m[3]) > 60_000) {
+                best = d; key = "r" + m[3];
+                text = "\u26A0 " + m[0] + " reported by you, " + Ui.distance(d, prefs.mph()); spoken = m[0] + " reported ahead";
+            }
+        }
+        if (key != null && speed > 3 && announced.add(key) && prefs.voice()) say(spoken);
+        return text;
+    }
+
+    /** distance in metres if the point is within range and in front of us, otherwise -1 */
+    private double ahead(double lat, double lon, double range) {
+        double d = Geo.distance(last.getLatitude(), last.getLongitude(), lat, lon);
+        if (d > range) return -1;
+        if (headingValid && d > 60) {
+            double b = Geo.bearing(last.getLatitude(), last.getLongitude(), lat, lon);
+            if (Math.abs(((b - heading + 540) % 360) - 180) > 40) return -1;
+        }
+        return d;
+    }
+
+    private List<String[]> reports() {
+        List<String[]> out = new ArrayList<>();
+        for (String r : prefs.reports().split(";")) {
+            String[] m = r.split(",");
+            if (m.length != 4) continue;
+            long age = System.currentTimeMillis() - Long.parseLong(m[3]);
+            // police move on, potholes stay for a while
+            if (age < (m[0].equals("Police") ? 7_200_000L : 30L * 86_400_000L)) out.add(m);
+        }
+        return out;
+    }
+
+    private void reportDialog() {
+        if (last == null) { toast("Waiting for GPS"); return; }
+        Location here = new Location(last);
+        String[] kinds = {"Police", "Object on road", "Pothole", "Road closed"};
+        new AlertDialog.Builder(this).setTitle("Report at this spot").setItems(kinds, (d, i) -> {
+            StringBuilder b = new StringBuilder();
+            List<String[]> all = reports();
+            for (int k = Math.max(0, all.size() - 80); k < all.size(); k++) b.append(String.join(",", all.get(k))).append(';');
+            long when = System.currentTimeMillis();
+            b.append(kinds[i]).append(',').append(here.getLatitude()).append(',').append(here.getLongitude()).append(',').append(when).append(';');
+            prefs.edit().putString("reports", b.toString()).apply();
+            toast("Saved. You will be warned next time you approach.");
+        }).show();
+    }
+
+    private void tripDialog() {
+        Safety.Trip t = safety.trip;
+        boolean mph = prefs.mph();
+        new AlertDialog.Builder(this).setTitle("Safety score: " + t.score() + " / 100").setMessage(String.format(Locale.US,
+                "Distance: %s\nDriving time: %d min\nTop speed: %d %s\nTime over the limit: %d s\nTime following too close: %d s\nHard brakes: %d\nCollision warnings: %d",
+                Ui.distance(t.meters, mph), Math.round(t.movingSec / 60), Ui.speed(t.topSpeed, mph), Ui.unit(mph),
+                Math.round(t.speedingSec), Math.round(t.closeSec), t.hardBrakes, t.collisionWarnings))
+                .setPositiveButton("OK", null).show();
+    }
+
+    private void show(int level, String text, String speak, boolean aloud, long now) {
+        adviceBar.setText(text);
+        if (level != lastLevel) {
+            int col = level == Advisor.DANGER ? Ui.RED : level == Advisor.WARN ? Ui.AMBER : level == Advisor.GOOD ? Ui.GREEN : Ui.BLUE;
             GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
                     new int[]{(col & 0x00FFFFFF) | 0xF0000000, Color.argb(220, Color.red(col) / 4, Color.green(col) / 4, Color.blue(col) / 4)});
             g.setCornerRadius(dp(18)); g.setStroke(dp(1.5f), col);
             adviceBar.setBackground(g);
-            if (a.level == Advisor.DANGER) {
+            if (level == Advisor.DANGER) {
                 ObjectAnimator an = ObjectAnimator.ofFloat(adviceBar, "alpha", 1f, .35f, 1f);
                 an.setDuration(400); an.setRepeatCount(3); an.start();
             }
-            lastLevel = a.level;
+            lastLevel = level;
         }
-        if (a.speak != null && a.level >= Advisor.WARN) {
-            long wait = a.speak.equals(lastSpeech) ? (a.level == Advisor.DANGER ? 4000 : 20000) : 3000;
+        if (speak != null && aloud) {
+            long wait = speak.equals(lastSpeech) ? (level == Advisor.DANGER ? 4000 : 20000) : 2500;
             if (now - lastSpoke > wait) {
-                lastSpoke = now; lastSpeech = a.speak;
-                if (a.level == Advisor.DANGER && tone != null) tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600);
-                if (prefs.voice()) say(a.speak);
+                lastSpoke = now; lastSpeech = speak;
+                if (level == Advisor.DANGER && tone != null) tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600);
+                if (prefs.voice()) say(speak);
             }
         }
+    }
+
+    private void sosDialog(boolean crash) {
+        if (isFinishing() || (sos != null && sos.isShowing())) return;
+        String number = prefs.sosNumber();
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(crash ? "Hard crash detected. Are you OK?" : "Emergency")
+                .setMessage(number.isEmpty() ? "Add an emergency contact in Setup to text your location."
+                        : "Text your location to " + number + " or call 911.")
+                .setPositiveButton("Call 911", (d, w) -> launch(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:911"))))
+                .setNegativeButton("I'm OK", null);
+        if (!number.isEmpty()) b.setNeutralButton("Text contact", (d, w) -> {
+            Intent i = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(number)));
+            i.putExtra("sms_body", "I need help. " + (last == null ? "Location unknown."
+                    : "My location: https://maps.google.com/?q=" + last.getLatitude() + "," + last.getLongitude()));
+            launch(i);
+        });
+        sos = b.show();
+        if (crash) {
+            say("Hard crash detected. Are you O K? Tap call 9 1 1 if you need help.");
+            if (tone != null) tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 1500);
+        }
+    }
+
+    private void launch(Intent i) {
+        try { startActivity(i); } catch (RuntimeException e) { toast("No app available for that"); }
+    }
+
+    private void cycleNight() {
+        prefs.edit().putInt("night", (prefs.night() + 1) % 4).apply();
+        showNightLabel();
+        applyNight();
+    }
+    private void showNightLabel() {
+        String[] names = {"Auto", "Day", "Night", "Green"};
+        nightButton.setText("\uD83C\uDF19 " + names[prefs.night()]);
+    }
+    private void applyNight() {
+        int m = prefs.night();
+        int view = m == 0 ? (autoDark ? 1 : 0) : m - 1;
+        if (camera != null) camera.setNight(view > 0);
+        if (view != nightShown) { nightShown = view; NightView.apply(preview, view); }
     }
 
     private void say(String s) { if (ttsReady) tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, "dash"); }
@@ -510,7 +729,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             if (s.along <= pr[1] + 12) continue;
             double d = s.along - pr[1];
             String arrow = s.direction < 0 ? "⬅ " : s.direction > 0 ? "➡ " : "⬆ ";
-            turnBar.setText(arrow + Ui.distance(d, prefs.mph()) + "   " + s.text);
+            // big arrow and distance, small street name: readable at a glance
+            String big = arrow + Ui.distance(d, prefs.mph());
+            android.text.SpannableString card = new android.text.SpannableString(big + "\n" + s.text);
+            card.setSpan(new android.text.style.RelativeSizeSpan(1.9f), 0, big.length(), 0);
+            turnBar.setText(card);
+            turnBar.setMaxLines(3);
+            map.nextTurn(Geo.slice(r.points, Math.max(0, s.along - 50), s.along + 40), d);
             turnBar.setVisibility(View.VISIBLE);
             in.turnDirection = s.direction; in.turnMeters = d;
             String id = s.along + (d < 90 ? "near" : "far");
@@ -583,33 +808,47 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         map.followCar();
     }
 
-    private void searchDialog() {
-        EditText e = new EditText(this);
-        e.setHint("Address or place");
-        e.setSingleLine(true);
-        e.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        AlertDialog d = new AlertDialog.Builder(this).setTitle("Where to?").setView(e)
-                .setPositiveButton("Search", null).setNegativeButton("Cancel", null).create();
-        Runnable go = () -> {
-            String q = e.getText().toString().trim();
-            if (q.isEmpty()) return;
-            d.dismiss();
-            toast("Searching…");
-            data.search(q, last == null ? 0 : last.getLatitude(), last == null ? 0 : last.getLongitude(), last != null, places -> {
-                if (isFinishing()) return;
-                if (places == null || places.isEmpty()) { toast(places == null ? "Search failed" : "Nothing found"); return; }
-                String[] names = new String[places.size()];
-                for (int i = 0; i < names.length; i++) {
-                    RoadData.Place p = places.get(i);
-                    names[i] = (last == null ? "" : Ui.distance(Geo.distance(last.getLatitude(), last.getLongitude(), p.lat, p.lon), prefs.mph()) + "  •  ") + p.name;
-                }
-                new AlertDialog.Builder(this).setTitle("Choose destination")
-                        .setItems(names, (x, i) -> routeTo(places.get(i).lat, places.get(i).lon)).show();
-            });
-        };
-        e.setOnEditorActionListener((v, a, ev) -> { go.run(); return true; });
-        d.show();
-        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> go.run());
+    private void openSearch() {
+        if (searchPanel == null) searchPanel = new SearchPanel(this, prefs, data, this::routeTo);
+        searchPanel.open(last == null ? 0 : last.getLatitude(), last == null ? 0 : last.getLongitude(), last != null, speed > 3);
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent intent) {
+        super.onActivityResult(request, result, intent);
+        if (request == SearchPanel.VOICE && result == RESULT_OK && intent != null && searchPanel != null) {
+            ArrayList<String> said = intent.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
+            if (said != null && !said.isEmpty()) searchPanel.heard(said.get(0));
+        }
+    }
+
+    /** Guidance view: bigger map, calmer screen. Only weights change, so the camera keeps running. */
+    private void driveFocus() {
+        boolean nav = !routes.isEmpty();
+        if (nav != navShown) { navShown = nav; weights(); map.navigation(nav); }
+        boolean calm = nav && speed > 3 && !calibrating;
+        buttonScroll.setVisibility(!calm || SystemClock.elapsedRealtime() < showButtonsUntil ? View.VISIBLE : View.GONE);
+        routeScroll.setVisibility(calm ? View.GONE : View.VISIBLE);
+        visionChip.setVisibility(calm ? View.GONE : View.VISIBLE);
+    }
+
+    private void weights() {
+        Configuration c = getResources().getConfiguration();
+        float ratio = c.screenWidthDp / (float) Math.max(1, c.screenHeightDp);
+        boolean wide = ratio > 1.35f, square = !wide && ratio > 0.75f;
+        if (wide) {
+            weight(cameraPane, navShown ? .95f : 1.55f); weight(side, navShown ? 1.35f : 1f);
+            weight(gauges, navShown ? .55f : 1f); weight(mapPane, navShown ? 1.7f : 1.15f);
+        } else {
+            weight(cameraPane, navShown ? .8f : square ? 1.25f : 1.1f);
+            weight(gauges, navShown ? .45f : square ? .52f : .62f);
+            weight(mapPane, navShown ? 1.45f : square ? .8f : 1f);
+        }
+    }
+
+    private static void weight(View v, float w) {
+        if (!(v.getLayoutParams() instanceof LinearLayout.LayoutParams)) return;
+        ((LinearLayout.LayoutParams) v.getLayoutParams()).weight = w;
+        v.requestLayout();
     }
 
     // ---------------------------------------------------------------- settings
@@ -673,6 +912,14 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         key.setText(prefs.tomtomKey());
         key.setHint("Paste key");
         p.addView(key);
+        p.addView(Ui.text(this, "AI key for car make and model. A free Google Gemini key (aistudio.google.com) or a Claude key (sk-ant-\u2026). A photo of the car ahead is sent to that service.", 12, Ui.DIM, false));
+        EditText ai = secret(prefs.aiKey(), "Paste AI key");
+        p.addView(ai);
+        p.addView(Ui.text(this, "Emergency contact phone number", 12, Ui.DIM, false));
+        EditText contact = new EditText(this);
+        contact.setInputType(InputType.TYPE_CLASS_PHONE);
+        contact.setText(prefs.sosNumber());
+        p.addView(contact);
         CheckBox mph = check(p, "Miles per hour", prefs.mph());
         CheckBox voice = check(p, "Spoken alerts and directions", prefs.voice());
         CheckBox auto = check(p, "Start recording when the app opens", prefs.autoRecord());
@@ -690,12 +937,22 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             try { g = Math.max(1, Math.min(200, Integer.parseInt(gb.getText().toString().trim()))); } catch (NumberFormatException ignored) { }
             prefs.edit().putString("tomtom", key.getText().toString().trim()).putBoolean("mph", mph.isChecked())
                     .putBoolean("voice", voice.isChecked()).putBoolean("autorec", auto.isChecked())
-                    .putBoolean("dark", dark.isChecked()).putInt("gb", g).apply();
+                    .putBoolean("dark", dark.isChecked()).putInt("gb", g)
+                    .putString("aikey", ai.getText().toString().trim()).putString("sos", contact.getText().toString().trim()).apply();
+            carId.reset();
             data.refreshNow();
             map.loadStyle();
             if (last != null) data.update(last.getLatitude(), last.getLongitude(), heading, headingValid);
             refresh();
         }).setNegativeButton("Cancel", null).show();
+    }
+
+    private EditText secret(String value, String hint) {
+        EditText e = new EditText(this);
+        e.setSingleLine(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setText(value); e.setHint(hint);
+        return e;
     }
 
     private CheckBox check(LinearLayout p, String s, boolean v) {
@@ -719,6 +976,11 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         if (x * x + y * y + z * z > 24 * 24 && now - lastImpact > 10000) {
             lastImpact = now;
             if (camera != null && camera.lockClip()) toast("Hard impact: clip locked");
+        }
+        // a very hard hit shortly after driving: offer help (a dropped parked phone does not count)
+        if (x * x + y * y + z * z > 40 * 40 && recentSpeed > 5 && now - recentSpeedAt < 8000) {
+            recentSpeed = 0;
+            sosDialog(true);
         }
     }
     @Override public void onAccuracyChanged(Sensor s, int a) { }
@@ -755,6 +1017,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         handler.removeCallbacksAndMessages(null);
         if (camera != null) camera.close();
         data.close();
+        carId.close();
         if (tts != null) tts.shutdown();
         if (tone != null) tone.release();
         map.view.onDestroy();

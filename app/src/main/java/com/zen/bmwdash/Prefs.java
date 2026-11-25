@@ -18,6 +18,14 @@ final class Prefs {
     float center() { return p.getFloat("center", 0.50f); }
     float hood() { return p.getFloat("hood", 0.88f); }
     float cameraHeight() { return p.getFloat("height", 1.20f); }
+    String aiKey() { return p.getString("aikey", "").trim(); }
+    String sosNumber() { return p.getString("sos", "").trim(); }
+    /** 0 auto, 1 off, 2 night boost, 3 green night view */
+    int night() { return p.getInt("night", 0); }
+    String reports() { return p.getString("reports", ""); }
+    String home() { return p.getString("home", ""); }
+    String work() { return p.getString("work", ""); }
+    String recents() { return p.getString("recents", "[]"); }
     int storageGb() { return p.getInt("gb", 8); }
 
     SharedPreferences.Editor edit() { return p.edit(); }
