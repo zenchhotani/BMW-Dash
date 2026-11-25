@@ -93,7 +93,7 @@ final class CameraEngine {
     private VideoCapture<Recorder> video;
     private Recording recording;
     private volatile float focalOverLong = 0.65f;
-    private boolean wantRecording, lockCurrent, closed;
+    private boolean wantRecording, lockCurrent, closed, paused;
     private long frameCount, fpsStart;
     private int fps, fpsFrames;
 
@@ -249,7 +249,7 @@ final class CameraEngine {
     boolean lockClip() { if (recording == null) return false; lockCurrent = true; return true; }
 
     private void nextSegment() {
-        if (!wantRecording || recording != null || video == null || closed) return;
+        if (!wantRecording || recording != null || video == null || closed || paused) return;
         worker.execute(this::prune);
         String name = "DASH_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
         ContentValues v = new ContentValues();
@@ -286,8 +286,8 @@ final class CameraEngine {
     }
 
     private void stopSegment() { if (recording != null) recording.stop(); }
-    void pause() { stopSegment(); }
-    void resume() { if (wantRecording) main.postDelayed(this::nextSegment, 1200); }
+    void pause() { paused = true; stopSegment(); }
+    void resume() { paused = false; if (wantRecording) main.postDelayed(this::nextSegment, 1200); }
 
     private void rename(Uri uri, String name) {
         try {
