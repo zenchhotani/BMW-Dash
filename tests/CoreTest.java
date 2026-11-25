@@ -82,6 +82,15 @@ public class CoreTest {
         check("mph", Math.abs(Geo.parseMaxSpeedKmh("55 mph") - 88.5) < .1 && Double.isNaN(Geo.parseMaxSpeedKmh("signals")));
         double[] p = Geo.project(new double[][]{{40,-75},{40.01,-75}}, 40.005, -75.0001);
         check("project", p[0] < 12 && Math.abs(p[1]-556) < 8);
+        double[][] corner = {{40,-75},{40.0005,-75},{40.0005,-74.999}}; // 55 m north, then right (east)
+        List<float[]> ahead = ArPath.build(corner, 0, ArPath.viewHeading(corner, 0, Double.NaN), 120, 5);
+        float[] near = ahead.get(4), far = ahead.get(ahead.size()-1);
+        check("ar straight", Math.abs(near[0]) < .5 && Math.abs(near[1]-20) < .5);
+        check("ar right turn " + far[0], far[0] > 30 && Math.abs(far[1]-55.6) < 1);
+        double[][] leftward = {{40,-75},{40.0005,-75},{40.0005,-75.001}};
+        List<float[]> lf = ArPath.build(leftward, 0, 0, 120, 5);
+        check("ar left turn", lf.get(lf.size()-1)[0] < -30);
+        check("ar snap", Math.abs(ArPath.viewHeading(corner, 0, 4) - ArPath.bearingAt(corner, 0)) < .01 && ArPath.viewHeading(corner, 0, 40) == 40);
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

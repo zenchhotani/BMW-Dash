@@ -209,7 +209,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         weatherChip = chip("…", Ui.VIOLET);
         chips.addView(weatherChip, margins(-2, -2, 6));
         top.addView(chips);
-        turnBar = Ui.text(this, "", 17, Ui.TEXT, true);
+        turnBar = Ui.text(this, "", 14, Ui.TEXT, true);
         GradientDrawable tg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{0xF01C5BFF, 0xF07A5CFF});
         tg.setCornerRadius(dp(16));
         turnBar.setBackground(tg);
@@ -222,7 +222,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         visionChip.setPadding(dp(8), dp(4), dp(8), 0);
         top.addView(visionChip);
         carCard = chip("", Ui.GREEN);
-        carCard.setTextSize(15);
+        carCard.setTextSize(13);
         carCard.setVisibility(View.GONE);
         LinearLayout.LayoutParams cc = new LinearLayout.LayoutParams(-2, -2);
         cc.topMargin = dp(6);
@@ -252,6 +252,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         buttons.addView(Ui.button(this, "⚙ Setup", Ui.BLUE, this::settingsDialog), margins(-2, -2, 6));
         nightButton = Ui.button(this, "\uD83C\uDF19 Auto", Ui.VIOLET, this::cycleNight);
         buttons.addView(nightButton, margins(-2, -2, 6));
+        buttons.addView(Ui.button(this, "\uD83D\uDDFA Map", Ui.CYAN, this::cycleMap), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\u26A0 Report", Ui.AMBER, this::reportDialog), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\uD83D\uDCCA Trip", Ui.GREEN, this::tripDialog), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\uD83C\uDD98 SOS", Ui.RED, () -> sosDialog(false)), margins(-2, -2, 6));
@@ -718,13 +719,24 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private String spokenStep = "";
 
     private void guidance(Advisor.Input in, boolean fresh) {
-        if (routes.isEmpty() || last == null) { turnBar.setVisibility(View.GONE); return; }
+        if (routes.isEmpty() || last == null) { turnBar.setVisibility(View.GONE); showGuide(null); return; }
         RoadData.Route r = routes.get(selected);
         double[] pr = Geo.project(r.points, last.getLatitude(), last.getLongitude());
         double remaining = Math.max(0, r.meters - pr[1]), secs = r.seconds * remaining / Math.max(1, r.meters);
         String eta = new SimpleDateFormat("h:mm a", Locale.US).format(new Date(System.currentTimeMillis() + (long) (secs * 1000)));
         etaChip.setText("ETA " + eta + "  •  " + Math.max(1, Math.round(secs / 60)) + " min  •  " + Ui.distance(remaining, prefs.mph()) + "   ✕");
         if (remaining < 35 && fresh) { say("You have arrived"); clearRoute(); return; }
+        ArRenderer.Guide ar = new ArRenderer.Guide();
+        ar.route = r.points; ar.along = pr[1]; ar.offRoute = pr[0]; ar.fixTime = lastFixTime;
+        ar.speed = fresh ? speed : 0;
+        ar.heading = headingValid && speed > 3 ? heading : Double.NaN;
+        for (RoadData.Step s : r.steps) {
+            if (s.along <= pr[1] + 12) continue;
+            ar.turnAlong = s.along; ar.direction = s.direction;
+            ar.label = Ui.distance(s.along - pr[1], prefs.mph()) + (s.direction < 0 ? "  LEFT" : s.direction > 0 ? "  RIGHT" : "  AHEAD");
+            break;
+        }
+        showGuide(ar);
         for (RoadData.Step s : r.steps) {
             if (s.along <= pr[1] + 12) continue;
             double d = s.along - pr[1];
@@ -732,7 +744,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             // big arrow and distance, small street name: readable at a glance
             String big = arrow + Ui.distance(d, prefs.mph());
             android.text.SpannableString card = new android.text.SpannableString(big + "\n" + s.text);
-            card.setSpan(new android.text.style.RelativeSizeSpan(1.9f), 0, big.length(), 0);
+            card.setSpan(new android.text.style.RelativeSizeSpan(1.35f), 0, big.length(), 0);
             turnBar.setText(card);
             turnBar.setMaxLines(3);
             map.nextTurn(Geo.slice(r.points, Math.max(0, s.along - 50), s.along + 40), d);
@@ -746,6 +758,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             return;
         }
         turnBar.setVisibility(View.GONE);
+    }
+
+    private void showGuide(ArRenderer.Guide g) {
+        overlay.guide(g, camera == null ? .65f : camera.focal(), prefs.horizon(), prefs.center(), prefs.cameraHeight());
     }
 
     private void checkOffRoute() {
@@ -804,6 +820,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         routeRow.removeAllViews();
         turnBar.setVisibility(View.GONE);
         etaChip.setText("Long-press the map or tap Go to");
+        showGuide(null);
         map.routes(routes, 0, null, false);
         map.followCar();
     }
@@ -831,18 +848,27 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         visionChip.setVisibility(calm ? View.GONE : View.VISIBLE);
     }
 
+    /** The camera gets most of the screen; the Map button picks small, large or hidden. */
     private void weights() {
         Configuration c = getResources().getConfiguration();
         float ratio = c.screenWidthDp / (float) Math.max(1, c.screenHeightDp);
         boolean wide = ratio > 1.35f, square = !wide && ratio > 0.75f;
+        int size = prefs.mapSize();
+        mapPane.setVisibility(size == 2 ? View.GONE : View.VISIBLE);
         if (wide) {
-            weight(cameraPane, navShown ? .95f : 1.55f); weight(side, navShown ? 1.35f : 1f);
-            weight(gauges, navShown ? .55f : 1f); weight(mapPane, navShown ? 1.7f : 1.15f);
+            weight(cameraPane, size == 1 ? 1.3f : size == 2 ? 3f : 2.2f); weight(side, 1f);
+            weight(gauges, size == 1 ? .6f : .85f); weight(mapPane, size == 1 ? 1.3f : 1f);
         } else {
-            weight(cameraPane, navShown ? .8f : square ? 1.25f : 1.1f);
-            weight(gauges, navShown ? .45f : square ? .52f : .62f);
-            weight(mapPane, navShown ? 1.45f : square ? .8f : 1f);
+            weight(cameraPane, size == 1 ? 1.2f : square ? 2.1f : 1.8f);
+            weight(gauges, square ? .5f : .58f);
+            weight(mapPane, size == 1 ? 1f : .55f);
         }
+    }
+
+    private void cycleMap() {
+        prefs.edit().putInt("mapsize", (prefs.mapSize() + 1) % 3).apply();
+        weights();
+        toast(new String[]{"Small map", "Large map", "Map hidden: full camera"}[prefs.mapSize()]);
     }
 
     private static void weight(View v, float w) {

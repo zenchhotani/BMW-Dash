@@ -25,6 +25,14 @@ final class OverlayView extends View {
     private int frameW = 16, frameH = 9;
     private double ego;
     String leadName = "";
+    private ArRenderer ar;
+    private ArRenderer.Guide guide;
+    private float focal = .65f, camHeight = 1.2f;
+
+    /** route guidance to draw on the road, or null */
+    void guide(ArRenderer.Guide g, float focalOverWidth, float hz, float cx, float height) {
+        guide = g; focal = focalOverWidth; horizon = hz; center = cx; camHeight = height; invalidate();
+    }
     private boolean mph = true, calibrating;
     private float horizon = .5f, center = .5f, hood = .88f;
 
@@ -42,6 +50,12 @@ final class OverlayView extends View {
         float s = Math.max(getWidth() / (float) frameW, getHeight() / (float) frameH);
         float w = frameW * s, h = frameH * s, ox = (getWidth() - w) / 2, oy = (getHeight() - h) / 2;
         if (lane != null) drawLane(c, ox, oy, w, h);
+        if (guide != null && !calibrating) {
+            if (ar == null) ar = new ArRenderer(d);
+            ar.camera(focal, frameH / (float) frameW, horizon, center, camHeight);
+            ar.draw(c, guide, ox, oy, w, h, getWidth(), getHeight());
+            postInvalidateDelayed(33);
+        }
         for (Track t : tracks) drawTrack(c, t, new RectF(ox + t.left * w, oy + t.top * h, ox + t.right * w, oy + t.bottom * h));
         if (calibrating) {
             p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2 * d);
@@ -56,7 +70,8 @@ final class OverlayView extends View {
     private void drawLane(Canvas c, float ox, float oy, float w, float h) {
         float y0 = Math.min(horizon + .10f, .8f), y1 = Math.max(hood, y0 + .1f);
         int color = lane.departing ? Ui.RED : lane.position == LaneState.Position.CENTERED ? Ui.CYAN : Ui.AMBER;
-        if (lane.hasLeft && lane.hasRight) {
+        // the route ribbon replaces the lane fill while guiding
+        if (lane.hasLeft && lane.hasRight && guide == null) {
             Path path = new Path();
             path.moveTo(ox + (lane.la + lane.lb * y0) * w, oy + y0 * h);
             path.lineTo(ox + (lane.ra + lane.rb * y0) * w, oy + y0 * h);

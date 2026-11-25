@@ -26,6 +26,8 @@ final class Prefs {
     String home() { return p.getString("home", ""); }
     String work() { return p.getString("work", ""); }
     String recents() { return p.getString("recents", "[]"); }
+    /** 0 small, 1 large, 2 hidden */
+    int mapSize() { return p.getInt("mapsize", 0); }
     int storageGb() { return p.getInt("gb", 8); }
 
     SharedPreferences.Editor edit() { return p.edit(); }

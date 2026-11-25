@@ -179,6 +179,9 @@ final class CameraEngine {
         if (video != null) video.setTargetRotation(rotation);
     }
 
+    /** focal length over upright frame width, as used for distances */
+    float focal() { return tracker.focal; }
+
     /** Night mode: lift exposure a little and brighten what the AI and lane finder see. */
     void setNight(boolean on) {
         if (enhance == on) return;

@@ -19,6 +19,7 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 - Closure, incident, slow-traffic and speed-camera warnings, plus your own police and pothole reports
 - Night view, crash prompt with one-tap 911 or text to a contact, break reminders and a trip safety score
 - Voice and live destination search, with a focused 3D guidance view
+- 3D route arrows and turn signs drawn on the camera picture; Map button for small, large or hidden map
 
 ## First drive
 1. Mount the phone in landscape behind the windscreen with a clear view, where it does not block yours.
