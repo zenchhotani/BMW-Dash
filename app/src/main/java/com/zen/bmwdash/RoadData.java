@@ -58,6 +58,7 @@ final class RoadData {
     private final long[] blockedUntil = new long[2];
     /** why the last road lookup failed, empty when fine */
     String roadProblem = "";
+    private String nearName = "";
     double flow = Double.NaN, freeFlow = Double.NaN; // m/s
     Weather weather;
     List<Incident> incidents = new ArrayList<>();
@@ -109,7 +110,7 @@ final class RoadData {
 
     private void fetchTomTomRoad(double lat, double lon, double heading, boolean valid, String key) {
         try {
-            String u = String.format(Locale.US, "https://api.tomtom.com/search/2/reverseGeocode/%.6f,%.6f.json?returnSpeedLimit=true&radius=60&key=%s", lat, lon, enc(key));
+            String u = String.format(Locale.US, "https://api.tomtom.com/search/2/reverseGeocode/%.6f,%.6f.json?returnSpeedLimit=true&radius=120&key=%s", lat, lon, enc(key));
             if (valid) u += "&heading=" + Math.round(heading);
             JSONArray a = new JSONObject(http(u, null)).getJSONArray("addresses");
             Road found = new Road();
@@ -175,7 +176,8 @@ final class RoadData {
 
     private void compose() {
         Road r = new Road();
-        r.name = !tom.name.isEmpty() ? tom.name : !osm.name.isEmpty() ? osm.name : nom.name;
+        r.name = !tom.name.isEmpty() ? tom.name : !osm.name.isEmpty() ? osm.name : !nom.name.isEmpty() ? nom.name
+                : nearName.isEmpty() ? "" : "Near " + nearName;
         r.limit = !Double.isNaN(tom.limit) ? tom.limit : !Double.isNaN(osm.limit) ? osm.limit : nom.limit;
         r.lanes = osm.lanes; r.oneway = osm.oneway;
         road = r;
@@ -183,7 +185,8 @@ final class RoadData {
 
     private void match(double lat, double lon, double heading, boolean headingValid) {
         if (ways == null) { compose(); return; }
-        JSONObject best = null; double bestScore = 55;
+        JSONObject best = null; double bestScore = 55, nearest = 150;
+        String near = "";
         for (int i = 0; i < ways.length(); i++) {
             JSONObject w = ways.optJSONObject(i);
             JSONArray g = w == null ? null : w.optJSONArray("geometry");
@@ -193,6 +196,8 @@ final class RoadData {
                 if (a == null || b == null) continue;
                 double la = a.optDouble("lat"), lo = a.optDouble("lon"), lb = b.optDouble("lat"), ob = b.optDouble("lon");
                 double score = Geo.toSegment(lat, lon, la, lo, lb, ob)[0];
+                JSONObject tags = w.optJSONObject("tags");
+                if (tags != null && score < nearest && !tags.optString("name").isEmpty()) { nearest = score; near = tags.optString("name"); }
                 if (headingValid) score += Geo.axisDifference(heading, Geo.bearing(la, lo, lb, ob)) * 0.6;
                 if (score < bestScore) { bestScore = score; best = w; }
             }
@@ -208,6 +213,7 @@ final class RoadData {
             try { r.lanes = Integer.parseInt(t.optString("lanes", "0")); } catch (NumberFormatException ignored) { }
         }
         osm = r;
+        nearName = near;
         compose();
     }
 

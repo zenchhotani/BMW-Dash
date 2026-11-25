@@ -392,7 +392,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         for (Track t : tracks) { if (t.lead) lead = t; if (t.isVehicle()) cars++; }
         lastVision = SystemClock.elapsedRealtime();
         overlay.calibration(calibrating, prefs.horizon(), prefs.center(), prefs.hood());
-        overlay.show(tracks, l, w, h, speed, prefs.mph());
+        // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
+        overlay.show(tracks, moving() || calibrating ? l : null, w, h, speed, prefs.mph());
         visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
         visionChip.setTextColor(Ui.CYAN);
         refresh();
@@ -405,6 +406,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     @Override public void onError(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
 
+    private boolean moving() { return speed > 3; }
+
     private void refresh() {
         long now = SystemClock.elapsedRealtime();
         boolean fresh = last != null && lastFixTime > 0 && now - lastFixTime < 5000;
@@ -415,12 +418,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         gauges.mph = prefs.mph(); gauges.hasFix = fresh; gauges.speed = speed; gauges.limit = road.limit;
         gauges.flow = data.flow; gauges.freeFlow = data.freeFlow; gauges.hasKey = !prefs.tomtomKey().isEmpty();
         gauges.leadDistance = seeing && lead != null ? lead.distance : Float.NaN;
-        boolean laneKnown = seeing && lane != null && lane.position != LaneState.Position.UNKNOWN;
+        boolean laneKnown = seeing && moving() && lane != null && lane.position != LaneState.Position.UNKNOWN;
         gauges.laneKnown = laneKnown; gauges.laneOffset = laneKnown ? lane.offset : 0; gauges.departing = laneKnown && lane.departing;
-        LaneState.LaneType type = seeing && lane != null ? lane.type : LaneState.LaneType.UNKNOWN;
+        LaneState.LaneType type = seeing && moving() && lane != null ? lane.type : LaneState.LaneType.UNKNOWN;
         String where = type == LaneState.LaneType.LEFTMOST ? "LEFT LANE" : type == LaneState.LaneType.RIGHTMOST ? "RIGHT LANE"
                 : type == LaneState.LaneType.MIDDLE ? "MIDDLE LANE" : type == LaneState.LaneType.YELLOW_ON_RIGHT ? "CHECK SIDE" : "";
-        String how = !laneKnown ? "SCANNING" : lane.position == LaneState.Position.CENTERED ? "CENTERED"
+        String how = !moving() ? "PARKED" : !laneKnown ? "SCANNING" : lane.position == LaneState.Position.CENTERED ? "CENTERED"
                 : lane.position == LaneState.Position.DRIFT_LEFT ? "DRIFT LEFT" : "DRIFT RIGHT";
         gauges.laneLabel = where.isEmpty() ? how : laneKnown && lane.position != LaneState.Position.CENTERED ? how : where;
         gauges.invalidate();
@@ -440,7 +443,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         Advisor.Input in = new Advisor.Input();
         in.speed = speed; in.limit = road.limit; in.flow = data.flow; in.freeFlow = data.freeFlow;
         in.lead = seeing ? lead : null;
-        in.laneDeparture = seeing && lane != null && lane.departing;
+        in.laneDeparture = seeing && moving() && lane != null && lane.departing;
         in.laneType = type;
         if (data.weather != null) in.weather = data.weather.hazard;
         in.incident = nearbyIncident();

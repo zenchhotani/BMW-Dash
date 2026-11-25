@@ -83,7 +83,7 @@ final class MapPanel extends FrameLayout {
     void loadStyle() {
         if (map == null) return;
         style = null;
-        String url = "https://tiles.openfreemap.org/styles/" + (prefs.mapDark() ? "dark" : "liberty");
+        String url = "https://tiles.openfreemap.org/styles/" + (prefs.mapDark() ? "fiord" : "liberty");
         map.setStyle(new Style.Builder().fromUri(url), s -> {
             style = s;
             String key = prefs.tomtomKey();
