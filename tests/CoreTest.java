@@ -63,6 +63,7 @@ public class CoreTest {
         check("rate", Math.abs(l.rangeRate + 5) < 1.2);
         Advisor.Input in = new Advisor.Input(); in.speed = 20; in.lead = l; l.distance = 12; l.rangeRate = -6;
         check("brake", Advisor.advise(in).level == Advisor.DANGER);
+        check("tomtom limit", Math.abs(Geo.parseMaxSpeedKmh("35.00mph") - 56.33) < .1);
         check("mph", Math.abs(Geo.parseMaxSpeedKmh("55 mph") - 88.5) < .1 && Double.isNaN(Geo.parseMaxSpeedKmh("signals")));
         double[] p = Geo.project(new double[][]{{40,-75},{40.01,-75}}, 40.005, -75.0001);
         check("project", p[0] < 12 && Math.abs(p[1]-556) < 8);

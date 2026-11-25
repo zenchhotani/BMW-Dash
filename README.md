@@ -17,7 +17,7 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 ## First drive
 1. Mount the phone in landscape behind the windscreen with a clear view, where it does not block yours.
 2. While parked, tap **Aim** and line up the horizon, lane centre and hood.
-3. Tap **Setup** and paste a TomTom key from developer.tomtom.com for live traffic.
+3. Tap **Setup** and paste a TomTom key from my.tomtom.com for live traffic.
 
 Videos are saved to `Movies/BMWDash`. Recording runs while the app is on screen and has no audio.
 

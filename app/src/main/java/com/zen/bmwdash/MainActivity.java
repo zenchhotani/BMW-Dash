@@ -86,7 +86,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private LocationManager locations;
     private SensorManager sensors;
 
-    private Location last;
+    private Location last, speedBase;
     private long lastFixTime, lastImpact, lastSpoke, lastRoute, lastVision;
     private String lastSpeech = "";
     private double speed, heading;
@@ -328,27 +328,54 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private void startLocation() {
         if (locationOn || !resumed || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return;
         try {
-            if (locations.getAllProviders().contains(LocationManager.GPS_PROVIDER)) {
-                locations.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500, 0, this, Looper.getMainLooper());
+            // listen to every source: GPS gives speed, fused and network give a position sooner
+            List<String> wanted = new ArrayList<>();
+            wanted.add(LocationManager.GPS_PROVIDER);
+            if (android.os.Build.VERSION.SDK_INT >= 31) wanted.add(LocationManager.FUSED_PROVIDER);
+            wanted.add(LocationManager.NETWORK_PROVIDER);
+            Location known = null;
+            for (String provider : wanted) {
+                if (!locations.getAllProviders().contains(provider)) continue;
+                locations.requestLocationUpdates(provider, 500, 0, this, Looper.getMainLooper());
                 locationOn = true;
-                Location l = locations.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (l != null && last == null) {
-                    map.location(l.getLatitude(), l.getLongitude(), 0, 0);
-                    data.update(l.getLatitude(), l.getLongitude(), 0, false);
-                    last = l;
-                }
-                if (!locations.isProviderEnabled(LocationManager.GPS_PROVIDER)) toast("Turn on Location to see speed and map");
+                Location k = locations.getLastKnownLocation(provider);
+                if (k != null && (known == null || k.getTime() > known.getTime())) known = k;
             }
-        } catch (SecurityException ignored) { }
+            if (known != null && last == null) {
+                map.location(known.getLatitude(), known.getLongitude(), 0, 0);
+                data.update(known.getLatitude(), known.getLongitude(), 0, false);
+                last = known;
+            }
+            if (!locations.isLocationEnabled()) toast("Turn on Location to see speed and map");
+        } catch (SecurityException e) { toast("Allow Precise location in app settings"); }
     }
 
     @Override public void onLocationChanged(@NonNull Location l) {
-        double v = l.hasSpeed() ? l.getSpeed() : 0;
+        long now = SystemClock.elapsedRealtime();
+        boolean recent = last != null && lastFixTime > 0 && now - lastFixTime < 3000;
+        boolean gps = LocationManager.GPS_PROVIDER.equals(l.getProvider());
+        // a rough network or fused fix must not override a better one that just arrived
+        if (recent && !gps && (l.getAccuracy() > last.getAccuracy() * 1.5f + 5 || (!l.hasSpeed() && last.hasSpeed()))) return;
+        double v = speed;
+        if (l.hasSpeed()) v = l.getSpeed();
+        else {
+            // no speed from the chip: work it out from how far we moved
+            if (speedBase == null || l.getAccuracy() > 30) { if (l.getAccuracy() <= 30) speedBase = l; if (!recent) v = 0; }
+            else {
+                double dt = (l.getElapsedRealtimeNanos() - speedBase.getElapsedRealtimeNanos()) / 1e9;
+                if (dt >= 2) {
+                    double moved = speedBase.distanceTo(l);
+                    v = dt < 8 && moved > l.getAccuracy() * 0.5 ? moved / dt : 0;
+                    if (v > 2) { heading = speedBase.bearingTo(l); headingValid = true; }
+                    speedBase = l;
+                }
+            }
+        }
         if (v < 0.7) v = 0;
         speed = v;
         if (l.hasBearing() && v > 2) { heading = l.getBearing(); headingValid = true; }
         last = l;
-        lastFixTime = SystemClock.elapsedRealtime();
+        lastFixTime = now;
         map.location(l.getLatitude(), l.getLongitude(), heading, speed);
         data.update(l.getLatitude(), l.getLongitude(), heading, headingValid);
         checkOffRoute();
@@ -380,7 +407,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     private void refresh() {
         long now = SystemClock.elapsedRealtime();
-        boolean fresh = last != null && now - lastFixTime < 4000;
+        boolean fresh = last != null && lastFixTime > 0 && now - lastFixTime < 5000;
         if (!fresh) speed = 0;
         boolean seeing = now - lastVision < 2000;
         RoadData.Road road = data.road;
@@ -398,7 +425,14 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         gauges.laneLabel = where.isEmpty() ? how : laneKnown && lane.position != LaneState.Position.CENTERED ? how : where;
         gauges.invalidate();
 
-        String name = road.name.isEmpty() ? (last == null ? "Finding your road…" : "Unnamed road") : road.name;
+        String name = road.name;
+        if (name.isEmpty()) {
+            if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) name = "Allow Precise location in settings";
+            else if (!locations.isLocationEnabled()) name = "Location is turned off";
+            else if (last == null) name = "Waiting for GPS (needs open sky)";
+            else if (!data.roadProblem.isEmpty()) name = data.roadProblem;
+            else name = "Looking up road\u2026";
+        }
         if (road.lanes > 0) name += "  •  " + road.lanes + (road.lanes == 1 ? " lane" : " lanes");
         roadChip.setText(name);
         weatherChip.setText(data.weather == null ? "…" : data.weather.summary);
@@ -629,7 +663,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         LinearLayout p = new LinearLayout(this);
         p.setOrientation(LinearLayout.VERTICAL);
         p.setPadding(dp(22), dp(8), dp(22), 0);
-        p.addView(Ui.text(this, "TomTom API key (live road speed, traffic, incidents). Free at developer.tomtom.com", 12, Ui.DIM, false));
+        p.addView(Ui.text(this, "TomTom API key (live road speed, traffic, incidents). Free at my.tomtom.com", 12, Ui.DIM, false));
         EditText key = new EditText(this);
         key.setSingleLine(true);
         key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
