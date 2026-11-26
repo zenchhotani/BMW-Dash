@@ -123,8 +123,8 @@ public final class Safety {
         // people, animals and objects in our path
         if (in.seeing && in.tracks != null && v > 3) {
             for (Track k : in.tracks) {
-                if (k.isVehicle() || k.hits < 3 || Float.isNaN(k.distance) || k.distance > Math.max(18, v * 2.5)) continue;
-                if (Math.abs(k.lateral) > 1.7) continue;
+                if (k.isVehicle() || !k.confirmed || Float.isNaN(k.distance) || k.distance > Math.max(18, v * 2.5)) continue;
+                if (Math.abs(k.lateral) > 1.5) continue;
                 String what = k.label.equals("person") ? "Person" : k.label.equals("bicycle") ? "Cyclist" : k.isAnimal() ? "Animal" : k.isObstacle() ? "Object" : null;
                 if (what == null || !fire("path" + what, t, 6000)) continue;
                 boolean close = k.distance < Math.max(10, v * 1.4);

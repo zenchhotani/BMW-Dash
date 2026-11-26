@@ -47,6 +47,7 @@ import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector;
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
+import com.zen.bmwdash.core.RoadUserFilter;
 import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
@@ -270,11 +271,21 @@ final class CameraEngine {
                 // by proportion, so yellow paint still counts in shade
                 yellow[i] = r > 65 && g > 50 && (r - b) * 4 > r && g - b > 15 && r >= g - 10 && (r - g) * 5 < r * 2;
             }
+            // people and animals must look right and not be a patch of glare
+            boolean dim = enhance || brightness < 90;
+            for (java.util.Iterator<Detection> it = dets.iterator(); it.hasNext(); ) {
+                Detection d = it.next();
+                if (RoadUserFilter.strict(d.label) && (!RoadUserFilter.plausible(d, horizon, h / (float) w, dim)
+                        || RoadUserFilter.glare(px, lw, lh, d))) it.remove();
+            }
+            tracker.poor = dim;
+
             List<float[]> blocked = new ArrayList<>();
             for (Track k : recent)
                 if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
             laneDetector.ignore = blocked;
             LaneDetector.Result res = laneDetector.detect(gray, yellow, lw, lh, horizon, hood, center);
+            laneState.horizon = horizon;
             laneState.update(res, t, center, hood);
             List<Track> tracks = tracker.update(dets, t, laneState);
             recent = tracks;

@@ -209,7 +209,7 @@ public final class LaneDetector {
         }
         float support = (float) used / rows;
         // real lane lines head towards the middle of the road ahead
-        if (support < minSupport || Math.abs(a + b * horizon - center) > 0.3f) return null;
+        if (support < minSupport || Math.abs(a + b * horizon - center) > 0.22f) return null;
         return new Line(a, b, Math.min(1f, support), (float) yel / used);
     }
 }

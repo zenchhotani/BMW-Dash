@@ -20,7 +20,7 @@ public final class ArPath {
     }
 
     public static double bearingAt(double[][] path, double along) {
-        double[] a = pointAt(path, along), b = pointAt(path, along + 15);
+        double[] a = pointAt(path, Math.max(0, along - 4)), b = pointAt(path, along + 12);
         return Geo.bearing(a[0], a[1], b[0], b[1]);
     }
 
@@ -28,13 +28,26 @@ public final class ArPath {
     public static double turn(double a, double b) { return ((b - a + 540) % 360) - 180; }
 
     /**
-     * The car's heading to draw with: the measured one, snapped to the road when they nearly agree,
-     * and the road's own direction when we have none.
+     * The car's heading to draw with. In normal driving the car follows the road, so the road's direction
+     * where the car is now is used: the GPS heading lags on bends and swung the route sideways.
+     * Only a clear disagreement at the last fix (turning off, facing elsewhere) is honoured.
+     *
+     * @param fixAlong where along the route the car was when the heading was measured
      */
-    public static double viewHeading(double[][] path, double along, double measured) {
+    public static double viewHeading(double[][] path, double along, double fixAlong, double measured) {
         double road = bearingAt(path, along);
-        if (Double.isNaN(measured) || Math.abs(turn(road, measured)) < 7) return road;
-        return measured;
+        if (Double.isNaN(measured)) return road;
+        double bias = turn(bearingAt(path, fixAlong), measured);
+        return Math.abs(bias) < 25 ? road : (road + bias + 360) % 360;
+    }
+
+    /** Cuts the path where it swings out of the camera's view, so no stray piece floats off to one side. */
+    public static List<float[]> inView(List<float[]> pts) {
+        for (int i = 0; i < pts.size(); i++) {
+            float[] p = pts.get(i);
+            if (Math.abs(p[0]) > 7 + 0.55f * Math.max(0, p[1])) return new ArrayList<>(pts.subList(0, i));
+        }
+        return pts;
     }
 
     /** @return points {metres right, metres ahead, metres along from the car} */

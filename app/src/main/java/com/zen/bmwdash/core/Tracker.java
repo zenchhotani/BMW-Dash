@@ -13,6 +13,8 @@ public final class Tracker {
     /** camera height above road, metres */
     public float cameraHeight = 1.25f;
     public float horizon = 0.5f, center = 0.5f;
+    /** dark picture: people and animals need more proof */
+    public boolean poor;
     private final List<Track> tracks = new ArrayList<>();
     private int nextId = 1, leadId = -1;
     private long lastT;
@@ -43,7 +45,8 @@ public final class Tracker {
         selectLead(lane);
         lastT = t;
         List<Track> out = new ArrayList<>();
-        for (Track tr : tracks) if (tr.hits >= 2) out.add(copy(tr));
+        for (Track tr : tracks)
+            if (RoadUserFilter.strict(tr.label) ? tr.confirmed : tr.hits >= 2) out.add(copy(tr));
         return out;
     }
 
@@ -59,6 +62,10 @@ public final class Tracker {
         tr.left += k * (d.left - tr.left); tr.top += k * (d.top - tr.top);
         tr.right += k * (d.right - tr.right); tr.bottom += k * (d.bottom - tr.bottom);
         tr.score = d.score; tr.label = d.label; tr.lastSeen = t; tr.hits++;
+        tr.scoreSum += d.score; tr.poor = poor;
+        if (!tr.confirmed && RoadUserFilter.strict(tr.label))
+            tr.confirmed = tr.hits >= 4 && t - tr.firstSeen >= 700
+                    && tr.scoreSum / tr.hits >= RoadUserFilter.minScore(tr.label, tr.poor);
         if (tr.isVehicle()) {
             float m = range(tr);
             if (Float.isNaN(m)) return;
@@ -131,6 +138,7 @@ public final class Tracker {
         c.id = s.id; c.label = s.label; c.score = s.score; c.left = s.left; c.top = s.top;
         c.right = s.right; c.bottom = s.bottom; c.firstSeen = s.firstSeen; c.lastSeen = s.lastSeen;
         c.hits = s.hits; c.distance = s.distance; c.rangeRate = s.rangeRate; c.lead = s.lead; c.lateral = s.lateral;
+        c.confirmed = s.confirmed;
         return c;
     }
 

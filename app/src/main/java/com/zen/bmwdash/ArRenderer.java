@@ -40,17 +40,18 @@ final class ArRenderer {
         // glide between GPS fixes
         double along = g.along + g.speed * Math.min(1.5, Math.max(0, (now - g.fixTime) / 1000.0));
         if (g.offRoute > 45) { banner(c, "Return to the route", viewW, viewH, Ui.AMBER); return; }
-        double view = ArPath.viewHeading(g.route, along, g.heading);
+        double view = ArPath.viewHeading(g.route, along, g.along, g.heading);
         if (Math.abs(ArPath.turn(ArPath.bearingAt(g.route, along), view)) > 110) {
             banner(c, "↺  Turn around", viewW, viewH, Ui.AMBER);
             return;
         }
-        List<float[]> pts = ArPath.build(g.route, along, view, 130, 2.5);
+        List<float[]> pts = ArPath.inView(ArPath.build(g.route, along, view, 130, 2.5));
         ribbon(c, pts);
         arrows(c, pts, (now % 1000) / 1000f);
         if (!Double.isNaN(g.turnAlong)) {
             double to = g.turnAlong - along;
-            if (to > -5) {
+            // a far-off turn stays on the card above: a big arrow now would point the wrong way
+            if (to > -5 && to < 350) {
                 sign(c, g, Math.max(0, to), view, along, viewW, viewH);
                 if (g.direction != 0 && to < 180) sideChevrons(c, g.direction, viewW, viewH, (now % 700) / 700f);
             }

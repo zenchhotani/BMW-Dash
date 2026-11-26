@@ -50,7 +50,8 @@ final class OverlayView extends View {
         // same centre-crop mapping as PreviewView.FILL_CENTER
         float s = Math.max(getWidth() / (float) frameW, getHeight() / (float) frameH);
         float w = frameW * s, h = frameH * s, ox = (getWidth() - w) / 2, oy = (getHeight() - h) / 2;
-        if (lane != null) drawLane(c, ox + laneShift * w, oy, w, h);
+        // a lone or unproven line reads as noise, so a lane is drawn only as a pair we trust
+        if (lane != null && lane.confident && lane.hasLeft && lane.hasRight) drawLane(c, ox + laneShift * w, oy, w, h);
         if (guide != null && !calibrating) {
             if (ar == null) ar = new ArRenderer(d);
             ar.camera(focal, frameH / (float) frameW, horizon, center, camHeight);

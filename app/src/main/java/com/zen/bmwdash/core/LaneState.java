@@ -42,6 +42,8 @@ public final class LaneState {
     public Position position = Position.UNKNOWN;
     public LaneType type = LaneType.UNKNOWN;
     public boolean departing;
+    /** calibrated horizon row, 0..1, when known */
+    public float horizon = Float.NaN;
 
     /** A frozen copy of the public values for another thread. */
     public LaneState snapshot() {
@@ -59,8 +61,14 @@ public final class LaneState {
         hasLeft = l.live(t); hasRight = r.live(t);
         la = l.a; lb = l.b; ra = r.a; rb = r.b;
         estimatedLeft = estimatedRight = false;
+        // two lines that cross or pinch cannot be one lane: keep only the better supported one
+        float far = Float.isNaN(horizon) ? yBottom - 0.12f : Math.min(horizon + 0.09f, yBottom - 0.1f);
+        boolean crossed = hasLeft && hasRight
+                && (ra + rb * yBottom - la - lb * yBottom < 0.15f || ra + rb * far - la - lb * far < 0.02f);
+        if (crossed) { if (l.support >= r.support) hasRight = false; else hasLeft = false; }
         confident = (l.stable(t) && l.support > .28f) || (r.stable(t) && r.support > .28f);
-        if (l.stable(t) && r.stable(t)) { widthA = ra - la; widthB = rb - lb; widthAt = t; }
+        if (crossed) { /* nothing to learn or guess from this frame */ }
+        else if (l.stable(t) && r.stable(t)) { widthA = ra - la; widthB = rb - lb; widthAt = t; }
         else if (t - widthAt < 8000) {
             if (hasLeft && !hasRight) { ra = la + widthA; rb = lb + widthB; hasRight = estimatedRight = true; }
             else if (hasRight && !hasLeft) { la = ra - widthA; lb = rb - widthB; hasLeft = estimatedLeft = true; }
@@ -78,13 +86,14 @@ public final class LaneState {
         }
         boolean out = Math.abs(offset) > 0.28f && position != Position.UNKNOWN;
         if (!out) driftSince = -1; else if (driftSince < 0) driftSince = t;
-        departing = out && t - driftSince > 600;
+        // never warn from a line that was only guessed
+        departing = out && !estimatedLeft && !estimatedRight && t - driftSince > 600;
 
         LaneType now = LaneType.UNKNOWN;
         if (r.stable(t) && r.isYellow() && r.solid()) now = LaneType.YELLOW_ON_RIGHT;
         else if (l.stable(t) && l.isYellow()) now = LaneType.LEFTMOST;
-        else if (r.stable(t) && r.solid() && !r.isYellow() && l.stable(t) && !l.solid()) now = LaneType.RIGHTMOST;
-        else if (l.stable(t) && r.stable(t) && !l.solid() && !r.solid()) now = LaneType.MIDDLE;
+        else if (!crossed && r.stable(t) && r.solid() && !r.isYellow() && l.stable(t) && !l.solid()) now = LaneType.RIGHTMOST;
+        else if (!crossed && l.stable(t) && r.stable(t) && !l.solid() && !r.solid()) now = LaneType.MIDDLE;
         if (now != candidate) { candidate = now; typeSince = t; }
         if (t - typeSince > 1500) type = candidate;
     }

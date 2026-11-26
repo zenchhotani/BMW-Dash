@@ -87,9 +87,26 @@ public class CoreTest {
         Safety s2 = new Safety(); l.distance = 6;
         for (int t = 0; t <= 9000; t += 100) { Safety.Input si = new Safety.Input(); si.t = t; si.speed = 0; si.seeing = true; si.tracks = List.of(l); l.distance = t < 6000 ? 6 : 11; ev = s2.update(si); if (ev != null) break; }
         check("traffic moving", ev != null && ev.code.equals("go"));
-        Track person = new Track(); person.label = "person"; person.hits = 5; person.distance = 12; person.lateral = .3f;
+        Track person = new Track(); person.label = "person"; person.hits = 5; person.confirmed = true; person.distance = 12; person.lateral = .3f;
         Safety.Input pi = new Safety.Input(); pi.t = 100; pi.speed = 12; pi.seeing = true; pi.tracks = List.of(person);
         ev = new Safety().update(pi); check("person in path", ev != null && ev.level == Advisor.DANGER);
+        person.confirmed = false;
+        check("unconfirmed person is quiet", new Safety().update(pi) == null);
+        Detection walker = new Detection("person", .72f, .48f, .45f, .53f, .70f);
+        check("real person shape", RoadUserFilter.plausible(walker, .5f, 9f / 16f, true));
+        check("huge person box rejected", !RoadUserFilter.plausible(new Detection("person", .8f, .2f, .2f, .55f, .9f), .5f, 9f / 16f, true));
+        check("weak person rejected", !RoadUserFilter.plausible(new Detection("person", .4f, .48f, .45f, .53f, .70f), .5f, 9f / 16f, false));
+        check("floating dog rejected", !RoadUserFilter.plausible(new Detection("dog", .8f, .4f, .2f, .46f, .3f), .5f, 9f / 16f, false));
+        check("cars not filtered", RoadUserFilter.plausible(new Detection("car", .34f, .4f, .2f, .46f, .3f), .5f, 9f / 16f, true));
+        int[] night = new int[100 * 100]; java.util.Arrays.fill(night, 0xFF202020);
+        check("dark box is not glare", !RoadUserFilter.glare(night, 100, 100, walker));
+        for (int r = 45; r < 58; r++) for (int c = 48; c < 53; c++) night[r * 100 + c] = 0xFFFFFFFF;
+        check("headlight is glare", RoadUserFilter.glare(night, 100, 100, walker));
+        Tracker blink = new Tracker();
+        blink.update(List.of(walker), 0, null); List<Track> two = blink.update(List.of(walker), 250, null);
+        check("brief person hidden", two.isEmpty());
+        blink.update(List.of(walker), 500, null); List<Track> held = blink.update(List.of(walker), 750, null);
+        check("steady person shown", held.size() == 1 && held.get(0).confirmed);
         int R = 0xFFFF2010, G = 0xFF20F0C0, Y = 0xFFFFC020;
         check("red lamp", SignalColor.classify(lamp(R, 6), 20, 50) == SignalColor.RED);
         check("green lamp", SignalColor.classify(lamp(G, 40), 20, 50) == SignalColor.GREEN);
@@ -110,14 +127,23 @@ public class CoreTest {
         double[] p = Geo.project(new double[][]{{40,-75},{40.01,-75}}, 40.005, -75.0001);
         check("project", p[0] < 12 && Math.abs(p[1]-556) < 8);
         double[][] corner = {{40,-75},{40.0005,-75},{40.0005,-74.999}}; // 55 m north, then right (east)
-        List<float[]> ahead = ArPath.build(corner, 0, ArPath.viewHeading(corner, 0, Double.NaN), 120, 5);
+        List<float[]> ahead = ArPath.build(corner, 0, ArPath.viewHeading(corner, 0, 0, Double.NaN), 120, 5);
         float[] near = ahead.get(4), far = ahead.get(ahead.size()-1);
         check("ar straight", Math.abs(near[0]) < .5 && Math.abs(near[1]-20) < .5);
         check("ar right turn " + far[0], far[0] > 30 && Math.abs(far[1]-55.6) < 1);
         double[][] leftward = {{40,-75},{40.0005,-75},{40.0005,-75.001}};
         List<float[]> lf = ArPath.build(leftward, 0, 0, 120, 5);
         check("ar left turn", lf.get(lf.size()-1)[0] < -30);
-        check("ar snap", Math.abs(ArPath.viewHeading(corner, 0, 4) - ArPath.bearingAt(corner, 0)) < .01 && ArPath.viewHeading(corner, 0, 40) == 40);
+        double rd = ArPath.bearingAt(corner, 0);
+        check("ar follows road", Math.abs(ArPath.viewHeading(corner, 0, 0, rd + 18) - rd) < .01);
+        check("ar honours real turn-off", Math.abs(ArPath.turn(rd, ArPath.viewHeading(corner, 0, 0, rd + 40)) - 40) < .01);
+        List<float[]> wild = new ArrayList<>(); wild.add(new float[]{0, 5, 0}); wild.add(new float[]{2, 15, 10}); wild.add(new float[]{40, 18, 50});
+        check("ar stays in view", ArPath.inView(wild).size() == 2);
+        LaneState kept = new LaneState(); kept.horizon = .5f; LaneDetector xd = new LaneDetector();
+        for (int ms = 0; ms <= 3000; ms += 100) { road(); line(.18f, .5f, false, false); line(.82f, .5f, false, false); kept.update(xd.detect(g, y, W, H, .5f, .9f, .5f), ms, .5f, .9f); }
+        check("good pair kept", kept.hasLeft && kept.hasRight);
+        // the same highway false alarm seen on the road: a screen-sized "animal" and "person"
+        check("highway glare animal rejected", !RoadUserFilter.plausible(new Detection("bear", .75f, .3f, .25f, .75f, .7f), .5f, 9f / 16f, true));
         // faded paint
         LaneDetector fd = new LaneDetector();
         road(); faint(.18f); faint(.82f);

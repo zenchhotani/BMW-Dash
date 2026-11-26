@@ -14,6 +14,11 @@ public final class Track {
     /** metres/second, positive = gap opening */
     public float rangeRate = Float.NaN;
     public boolean lead;
+    /** people, animals and objects: seen long and surely enough to show and warn about */
+    public boolean confirmed;
+    float scoreSum;
+    /** set when the picture is dark, which calls for more proof */
+    boolean poor;
     /** lit colour for traffic lights, see SignalColor */
     public int signal;
     /** the traffic light judged to be for our lane */
