@@ -271,7 +271,7 @@ final class CameraEngine {
 
             brightness += 0.05f * (sum / (float) px.length - brightness);
 
-            final boolean blocked = viewQuality.update(gray, lw, lh, sum / (float) px.length, hood, t);
+            final boolean unclear = viewQuality.update(gray, lw, lh, sum / (float) px.length, hood, t);
 
             // read every light just seen; larger and more central ones count for more
             Track ahead = null;
@@ -315,7 +315,7 @@ final class CameraEngine {
             // the lane state is written on this thread; give the screen its own copy
             final LaneState laneNow = laneState.snapshot();
             final float bright = brightness;
-            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright, blocked); listener.onVision(tracks, laneNow, fw, fh, rate); } });
+            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright, unclear); listener.onVision(tracks, laneNow, fw, fh, rate); } });
         } catch (Exception e) {
             Log.e(TAG, "analyze", e);
         } finally {
