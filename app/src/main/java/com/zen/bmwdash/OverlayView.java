@@ -53,7 +53,15 @@ final class OverlayView extends View {
         if (guide != null && !calibrating) {
             if (ar == null) ar = new ArRenderer(d);
             ar.camera(focal, frameH / (float) frameW, horizon, center, camHeight);
+            // keep vehicles and people clear: nothing from the route is painted over them
+            c.save();
+            for (Track t : tracks) {
+                if (!t.isVehicle() && !t.label.equals("person") && !t.label.equals("bicycle")) continue;
+                float px = (t.right - t.left) * w * .04f;
+                c.clipOutRect(ox + t.left * w - px, oy + t.top * h - px, ox + t.right * w + px, oy + t.bottom * h + px);
+            }
             ar.draw(c, guide, ox, oy, w, h, getWidth(), getHeight());
+            c.restore();
             postInvalidateDelayed(33);
         }
         for (Track t : tracks) drawTrack(c, t, new RectF(ox + t.left * w, oy + t.top * h, ox + t.right * w, oy + t.bottom * h));

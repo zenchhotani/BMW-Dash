@@ -28,6 +28,7 @@ final class Prefs {
     String recents() { return p.getString("recents", "[]"); }
     /** 0 small, 1 large, 2 hidden */
     int mapSize() { return p.getInt("mapsize", 0); }
+    boolean arRoute() { return p.getBoolean("arroute", true); }
     int storageGb() { return p.getInt("gb", 8); }
 
     SharedPreferences.Editor edit() { return p.edit(); }

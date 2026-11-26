@@ -85,6 +85,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private HorizontalScrollView routeScroll, buttonScroll;
     private SearchPanel searchPanel;
     private long showButtonsUntil;
+    private TextView arButton;
     private boolean navShown;
     private LinearLayout routeRow;
 
@@ -227,6 +228,18 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         LinearLayout.LayoutParams cc = new LinearLayout.LayoutParams(-2, -2);
         cc.topMargin = dp(6);
         top.addView(carCard, cc);
+        // always reachable while a route is active, even when the other buttons are tucked away
+        arButton = Ui.button(this, "", Ui.CYAN, () -> {
+            prefs.edit().putBoolean("arroute", !prefs.arRoute()).apply();
+            showArLabel();
+            refresh();
+        });
+        arButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ab = new LinearLayout.LayoutParams(-2, -2);
+        ab.gravity = Gravity.END;
+        ab.topMargin = dp(6);
+        top.addView(arButton, ab);
+        showArLabel();
         FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         topLp.setMargins(dp(8), dp(8), dp(8), 0);
         cameraPane.addView(top, topLp);
@@ -760,8 +773,15 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         turnBar.setVisibility(View.GONE);
     }
 
+    private void showArLabel() {
+        boolean on = prefs.arRoute();
+        arButton.setText(on ? "\u25C9 3D route ON" : "\u25CB 3D route OFF");
+        arButton.setAlpha(on ? 1f : .75f);
+    }
+
     private void showGuide(ArRenderer.Guide g) {
-        overlay.guide(g, camera == null ? .65f : camera.focal(), prefs.horizon(), prefs.center(), prefs.cameraHeight());
+        arButton.setVisibility(g == null ? View.GONE : View.VISIBLE);
+        overlay.guide(prefs.arRoute() ? g : null, camera == null ? .65f : camera.focal(), prefs.horizon(), prefs.center(), prefs.cameraHeight());
     }
 
     private void checkOffRoute() {
