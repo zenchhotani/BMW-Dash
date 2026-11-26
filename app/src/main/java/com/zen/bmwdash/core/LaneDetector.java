@@ -102,9 +102,12 @@ public final class LaneDetector {
         Line tr = follow(lastRight, pts, w, h, horizon, yb, center, rows);
         res.left = choose(res.left, tl, yb, center, true);
         res.right = choose(res.right, tr, yb, center, false);
+        // seen in perspective, our left line leans one way and our right line the other
+        if (res.left != null && res.left.x(yb) - res.left.x(horizon) > -0.04f) res.left = null;
+        if (res.right != null && res.right.x(yb) - res.right.x(horizon) < 0.04f) res.right = null;
         if (res.left != null && res.right != null) {
             float width = res.right.x(yb) - res.left.x(yb);
-            if (width < 0.28f || width > 1.6f) {
+            if (width < 0.4f || width > 1.6f) {
                 if (res.left.support >= res.right.support) res.right = null; else res.left = null;
             }
         }

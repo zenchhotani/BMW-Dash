@@ -31,7 +31,7 @@ public class CoreTest {
         }
     }
     static Track car(int id, float distance, float lateral, float rate) {
-        Track c = new Track(); c.id = id; c.label = "car"; c.hits = 20; c.distance = distance; c.lateral = lateral; c.rangeRate = rate; return c;
+        Track c = new Track(); c.id = id; c.label = "car"; c.hits = 20; c.distance = distance; c.lateral = lateral; c.rangeRate = rate; c.motion = Track.MOVING; return c;
     }
     public static void main(String[] a) {
         LaneDetector d = new LaneDetector();
@@ -164,6 +164,33 @@ public class CoreTest {
         int[] busy = new int[W*H]; for (int i = 0; i < busy.length; i++) busy[i] = (i % W / 6) % 2 == 0 ? 60 : 180;
         for (int ms = 8200; ms <= 12000; ms += 200) blind = vq.update(busy, W, H, 120, .9f, ms);
         check("view recovers", !blind);
+        // parked car beside the road while we drive at 12 m/s: no brake warning
+        MotionClassifier mc = new MotionClassifier(); Safety sp = new Safety(); Safety.Event pev = null; Track pk = null;
+        for (int ms = 0; ms <= 3000; ms += 100) {
+            pk = car(20, 40 - 12 * ms / 1000f, 1.3f, -12); pk.motion = 0; pk.lead = true; mc.update(ms, 12, List.of(pk));
+            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = List.of(pk); Safety.Event x = sp.update(si); if (x != null) pev = x;
+        }
+        check("parked quiet", pk.motion == Track.PARKED && !pk.lead && pev == null);
+        mc = new MotionClassifier(); Track mv = null;
+        for (int ms = 0; ms <= 2000; ms += 100) { mv = car(21, 20, 0, -1); mv.motion = 0; mv.lead = true; mc.update(ms, 12, List.of(mv)); }
+        check("moving car", mv.motion == Track.MOVING && mv.lead);
+        mc = new MotionClassifier(); sp = new Safety(); pev = null;
+        for (int ms = 0; ms <= 3000; ms += 100) {
+            Track k = car(22, 45 - 12 * ms / 1000f, 0.2f, -12); k.motion = 0; k.lead = true; mc.update(ms, 12, List.of(k));
+            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = List.of(k); Safety.Event x = sp.update(si); if (x != null && x.code.equals("brake")) pev = x;
+        }
+        check("stopped car dead ahead still warns", pev != null);
+        Track side = new Track(); side.id = 1; side.label = "traffic light"; side.left = .8f; side.right = .84f; side.top = .2f; side.bottom = .3f;
+        Track mid = new Track(); mid.id = 2; mid.label = "traffic light"; mid.left = .52f; mid.right = .54f; mid.top = .2f; mid.bottom = .28f;
+        check("our light only", new SignalPicker().pick(List.of(side, mid), .5f, .5f, 1920) == mid && !side.ours);
+        SignReader sr = new SignReader();
+        List<SignReader.Line> sign = List.of(new SignReader.Line("SPEED", 10, 10, 60, 22), new SignReader.Line("LIMIT", 12, 24, 58, 36), new SignReader.Line("15", 20, 40, 50, 66));
+        check("one read waits", sr.read(sign, 1000).isEmpty());
+        List<SignReader.Sign> got = sr.read(sign, 1700);
+        check("limit sign", got.size() == 1 && got.get(0).limit == 15);
+        SignReader sr2 = new SignReader(); List<SignReader.Line> st2 = List.of(new SignReader.Line("STOP", 0, 0, 40, 20), new SignReader.Line("Bus Stop Cafe", 0, 80, 90, 95));
+        sr2.read(st2, 1000); got = sr2.read(st2, 1500);
+        check("stop word", got.size() == 1 && got.get(0).code.equals("stop"));
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

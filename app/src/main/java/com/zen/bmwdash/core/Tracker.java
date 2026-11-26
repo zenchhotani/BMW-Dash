@@ -38,7 +38,7 @@ public final class Tracker {
             tracks.add(tr);
         }
         for (Iterator<Track> it = tracks.iterator(); it.hasNext(); ) {
-            if (t - it.next().lastSeen > 700) it.remove();
+            if (t - it.next().lastSeen > 1200) it.remove();
         }
         selectLead(lane);
         lastT = t;
@@ -119,7 +119,7 @@ public final class Tracker {
                 inLane = tr.cx() > xl + pad && tr.cx() < xr - pad;
             } else {
                 float lateral = (tr.cx() - center) * tr.distance / focal;
-                inLane = Math.abs(lateral) < (tr.id == leadId ? 1.9f : 1.4f);
+                inLane = Math.abs(lateral) < (tr.id == leadId ? 1.6f : 1.2f);
             }
             if (inLane && (best == null || tr.distance < best.distance)) best = tr;
         }

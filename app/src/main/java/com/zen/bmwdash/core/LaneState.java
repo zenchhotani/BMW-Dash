@@ -31,6 +31,8 @@ public final class LaneState {
     private float widthA, widthB;
     /** true when that side is worked out from the usual lane width, not seen */
     public boolean estimatedLeft, estimatedRight;
+    /** at least one side has been tracked long enough to trust */
+    public boolean confident;
     private LaneType candidate = LaneType.UNKNOWN;
 
     public boolean hasLeft, hasRight, leftSolid, rightSolid, leftYellow, rightYellow;
@@ -47,7 +49,7 @@ public final class LaneState {
         s.hasLeft = hasLeft; s.hasRight = hasRight; s.leftSolid = leftSolid; s.rightSolid = rightSolid;
         s.leftYellow = leftYellow; s.rightYellow = rightYellow; s.la = la; s.lb = lb; s.ra = ra; s.rb = rb;
         s.offset = offset; s.position = position; s.type = type; s.departing = departing;
-        s.estimatedLeft = estimatedLeft; s.estimatedRight = estimatedRight;
+        s.estimatedLeft = estimatedLeft; s.estimatedRight = estimatedRight; s.confident = confident;
         return s;
     }
 
@@ -57,6 +59,7 @@ public final class LaneState {
         hasLeft = l.live(t); hasRight = r.live(t);
         la = l.a; lb = l.b; ra = r.a; rb = r.b;
         estimatedLeft = estimatedRight = false;
+        confident = (l.stable(t) && l.support > .28f) || (r.stable(t) && r.support > .28f);
         if (l.stable(t) && r.stable(t)) { widthA = ra - la; widthB = rb - lb; widthAt = t; }
         else if (t - widthAt < 8000) {
             if (hasLeft && !hasRight) { ra = la + widthA; rb = lb + widthB; hasRight = estimatedRight = true; }

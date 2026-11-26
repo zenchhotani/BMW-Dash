@@ -24,6 +24,8 @@ final class Prefs {
     int night() { return p.getInt("night", 0); }
     /** 0 auto, 1 off, 2 rain, 3 snow, 4 fog */
     int weatherMode() { return p.getInt("wxmode", 0); }
+    /** sideways correction of the drawn lane, fraction of frame width */
+    float laneShift() { return p.getFloat("laneshift", 0f); }
     boolean radar() { return p.getBoolean("radar", true); }
     String reports() { return p.getString("reports", ""); }
     String home() { return p.getString("home", ""); }

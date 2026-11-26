@@ -24,6 +24,8 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 - Early warning of slow traffic, jams and closures further along (needs a TomTom key)
 - Weather Mode (auto or manual rain/snow/fog): Clear View filter, earlier alerts, suggested speed, reminders
 - National Weather Service alerts, rain/snow radar, forecast along the route, bridge ice and blocked-camera warnings
+- Reads road signs (speed limit, stop, school and work zones and more) with on-device text recognition
+- Tells parked, stopped and moving vehicles apart; follows only the signal for your lane
 - Voice and live destination search, with a focused 3D guidance view
 - 3D route arrows and turn signs drawn on the camera picture; Map button for small, large or hidden map; 3D route on/off button
 

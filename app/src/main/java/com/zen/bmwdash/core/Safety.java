@@ -21,6 +21,7 @@ public final class Safety {
         public double safeGap = 2;           // seconds
         public int light;                    // SignalColor value
         public double caution = 1;           // above 1 on slippery or low-visibility roads
+        public boolean turning;              // our car is going round a bend or corner
     }
     public static final class Trip {
         public double meters, movingSec, speedingSec, closeSec, topSpeed;
@@ -64,7 +65,12 @@ public final class Safety {
         }
 
         // collision: needs a steady track and a condition that persists
-        if (ranged && v > 4 && lead.hits >= 5 && !Float.isNaN(lead.rangeRate)) {
+        // only for something really in our path; anything not seen moving must be dead ahead and well established
+        boolean moves = ranged && lead.motion == Track.MOVING;
+        boolean inPath = ranged && lead.motion != Track.PARKED
+                && (Float.isNaN(lead.lateral) || Math.abs(lead.lateral) < (moves ? 1.5f : 0.9f))
+                && (moves || (!in.turning && lead.hits >= 8));
+        if (inPath && v > 4 && lead.hits >= 5 && !Float.isNaN(lead.rangeRate)) {
             double closing = -lead.rangeRate, d = lead.distance;
             double ttc = closing > 1.5 ? d / closing : 99;
             double needed = closing > 1.5 ? closing * closing / (2 * Math.max(1, d - 4)) : 0;
@@ -72,7 +78,7 @@ public final class Safety {
             boolean danger = d < 60 * c && (ttc < 2.5 * (1 + (c - 1) * .6) || needed > 4 / c);
             if (danger) {
                 if (dangerSince < 0) dangerSince = t;
-                if (t - dangerSince >= 250) {
+                if (t - dangerSince >= 400) {
                     if (fire("fcwcount", t, 8000)) trip.collisionWarnings++;
                     hold(new Event("brake", Advisor.DANGER, "BRAKE NOW", "Brake! Brake!"), t, 1500);
                 }
@@ -107,6 +113,12 @@ public final class Safety {
         }
         if (ranged) { prevLeadId = lead.id; prevLeadDist = lead.distance; }
         else if (lead == null && in.seeing) { prevLeadDist = Float.NaN; }
+
+        // stop signs facing us: central or on our side of the road
+        if (in.seeing && in.tracks != null && v > 2.5)
+            for (Track k : in.tracks)
+                if (k.label.equals("stop sign") && k.hits >= 2 && k.cx() > 0.35f && k.right - k.left > 0.012f && fire("stopsign", t, 15000))
+                    hold(new Event("stopsign", Advisor.WARN, "Stop sign ahead", "Stop sign ahead"), t, 3500);
 
         // people, animals and objects in our path
         if (in.seeing && in.tracks != null && v > 3) {

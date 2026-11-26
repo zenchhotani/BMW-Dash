@@ -25,6 +25,7 @@ final class OverlayView extends View {
     private int frameW = 16, frameH = 9;
     private double ego;
     String leadName = "";
+    float laneShift;
     private ArRenderer ar;
     private ArRenderer.Guide guide;
     private float focal = .65f, camHeight = 1.2f;
@@ -49,7 +50,7 @@ final class OverlayView extends View {
         // same centre-crop mapping as PreviewView.FILL_CENTER
         float s = Math.max(getWidth() / (float) frameW, getHeight() / (float) frameH);
         float w = frameW * s, h = frameH * s, ox = (getWidth() - w) / 2, oy = (getHeight() - h) / 2;
-        if (lane != null) drawLane(c, ox, oy, w, h);
+        if (lane != null) drawLane(c, ox + laneShift * w, oy, w, h);
         if (guide != null && !calibrating) {
             if (ar == null) ar = new ArRenderer(d);
             ar.camera(focal, frameH / (float) frameW, horizon, center, camHeight);
@@ -64,7 +65,9 @@ final class OverlayView extends View {
             c.restore();
             postInvalidateDelayed(33);
         }
-        for (Track t : tracks) drawTrack(c, t, new RectF(ox + t.left * w, oy + t.top * h, ox + t.right * w, oy + t.bottom * h));
+        for (Track t : tracks)
+            // other roads' signals are not shown, so only the one for us stands out
+            if (!t.label.equals("traffic light") || t.ours) drawTrack(c, t, new RectF(ox + t.left * w, oy + t.top * h, ox + t.right * w, oy + t.bottom * h));
         if (calibrating) {
             p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2 * d);
             p.setColor(Ui.AMBER);
@@ -130,6 +133,15 @@ final class OverlayView extends View {
             double gap = ego > 3 && !Float.isNaN(t.distance) ? t.distance / ego : 99;
             color = gap < 1.2 ? Ui.RED : gap < 2 ? Ui.AMBER : Ui.GREEN;
         }
+        if (t.motion == Track.PARKED) {
+            p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.2f * d); p.setColor(0x99AAB4C8);
+            c.drawRoundRect(r, 6 * d, 6 * d, p);
+            if (r.width() > 60 * d) {
+                p.setStyle(Paint.Style.FILL); p.setTextSize(10 * d); p.setTypeface(Typeface.DEFAULT_BOLD);
+                c.drawText("PARKED", r.left + 4 * d, r.top - 4 * d, p);
+            }
+            return;
+        }
         float k = Math.max(8 * d, Math.min(r.width(), r.height()) * .24f);
         p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeCap(Paint.Cap.ROUND);
         for (int pass = 0; pass < 2; pass++) {
@@ -147,7 +159,8 @@ final class OverlayView extends View {
         if (t.signal != 0) s = t.signal == 1 ? "RED LIGHT" : t.signal == 2 ? "YELLOW LIGHT" : "GREEN LIGHT";
         if (vehicle && !Float.isNaN(t.distance)) {
             s = Ui.range(t.distance, mph);
-            if (!Float.isNaN(t.rangeRate)) {
+            if (t.motion == Track.STOPPED) s += "  \u2022  STOPPED";
+            else if (t.motion == Track.MOVING && !Float.isNaN(t.rangeRate)) {
                 double other = ego + t.rangeRate; // their speed relative to the road
                 if (ego > 3 && other > -2) s += "  •  " + Ui.speed(Math.max(0, other), mph) + " " + Ui.unit(mph);
             }

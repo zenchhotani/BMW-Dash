@@ -55,35 +55,37 @@ public final class Predictor {
             Past p = past.get(k.id);
             double side = rate(p, 1, 1.2) - turning * Math.max(8, k.distance);
             double accel = rate(p, 2, 1.6);
-            double lat = k.lateral, other = speed + k.rangeRate;
+            double lat = k.lateral;
             boolean moving = speed > 5;
 
-            boolean cutting = moving && Math.abs(lat) > 1.3 && Math.abs(lat) < 4.5 && side * lat < 0
+            boolean driving = k.motion == Track.MOVING;
+            boolean cutting = driving && moving && Math.abs(lat) > 1.3 && Math.abs(lat) < 4.5 && side * lat < 0
                     && Math.abs(side) > 0.55 && Math.abs(lat + side * 1.8) < 1.3 && k.distance < Math.max(20, speed * 2.5);
             if (!cutting) p.cutSince = -1; else if (p.cutSince < 0) p.cutSince = t;
-            boolean leaving = k.lead && moving && side * lat > 0 && Math.abs(side) > 0.55 && Math.abs(lat + side * 1.5) > 1.9;
+            boolean leaving = driving && k.lead && moving && side * lat > 0 && Math.abs(side) > 0.55 && Math.abs(lat + side * 1.5) > 1.9;
             if (!leaving) p.leaveSince = -1; else if (p.leaveSince < 0) p.leaveSince = t;
-            weave(p, t, lat - turning * k.distance);
+            if (driving) weave(p, t, lat - turning * k.distance);
 
             Safety.Event e = null;
             if (p.cutSince >= 0 && t - p.cutSince >= 400) {
                 k.intent = "MOVING INTO YOUR LANE";
                 e = event("p-cut", Advisor.WARN, "Car on your " + (lat < 0 ? "left" : "right") + " may cut in: ease off",
                         "Car may cut in", k.id, t);
-            } else if (k.lead && moving && !Float.isNaN(k.rangeRate) && other < 2 && k.distance < Math.max(25, speed * 4)) {
+            } else if (k.lead && moving && k.motion == Track.STOPPED && Math.abs(lat) < 0.9 && k.hits >= 8
+                    && k.distance < Math.max(25, speed * 4)) {
                 k.intent = "STOPPED";
                 e = event("p-stop", Advisor.WARN, "Stopped vehicle ahead: slow down", "Stopped vehicle ahead", k.id, t);
-            } else if (k.lead && moving && accel < -1.8 && k.distance < speed * 3.5) {
+            } else if (driving && k.lead && moving && accel < -1.8 && k.distance < speed * 3.5) {
                 k.intent = "SLOWING";
                 e = event("p-slow", Advisor.WARN, "Driver ahead is slowing: get ready to brake", "Car ahead slowing", k.id, t);
-            } else if (p.swings.size() >= 3 && moving) {
+            } else if (driving && p.swings.size() >= 3 && moving) {
                 k.intent = "WEAVING";
                 e = event("p-weave", Advisor.WARN, "Vehicle ahead is weaving: keep your distance",
                         "Vehicle ahead is weaving", k.id, t);
             } else if (p.leaveSince >= 0 && t - p.leaveSince >= 400) {
                 k.intent = String.format(Locale.US, "MOVING %s", side < 0 ? "LEFT" : "RIGHT");
                 e = event("p-leave", Advisor.INFO, "Car ahead is changing lanes", null, k.id, t);
-            } else if (k.lead && moving && accel > 1.5) k.intent = "SPEEDING UP";
+            } else if (driving && k.lead && moving && accel > 1.5) k.intent = "SPEEDING UP";
             if (e != null && (worst == null || e.level > worst.level)) worst = e;
         }
         for (Iterator<Past> it = past.values().iterator(); it.hasNext(); ) if (t - it.next().seen > 2000) it.remove();

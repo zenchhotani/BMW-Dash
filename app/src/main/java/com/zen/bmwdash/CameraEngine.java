@@ -50,7 +50,9 @@ import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
 import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.SignalColor;
+import com.zen.bmwdash.core.SignalPicker;
 import com.zen.bmwdash.core.SignalState;
 import com.zen.bmwdash.core.Track;
 import com.zen.bmwdash.core.ViewQuality;
@@ -75,6 +77,7 @@ final class CameraEngine {
         void onRecording(boolean recording, long seconds, boolean locked);
         void onError(String message);
         void onScene(int light, float brightness, boolean blocked);
+        void onSigns(List<SignReader.Sign> signs);
         /** ask first: is a picture of this lead car wanted? */
         boolean wantsCar(int id, int widthPx);
         void onCarPicture(int id, Bitmap crop, int widthPx);
@@ -112,6 +115,12 @@ final class CameraEngine {
     private List<Track> recent = new ArrayList<>();
     private final ViewQuality viewQuality = new ViewQuality();
     private final SignalState signalState = new SignalState();
+    private final SignalPicker signalPicker = new SignalPicker();
+    private final SignReader signReader = new SignReader();
+    private com.google.mlkit.vision.text.TextRecognizer reader;
+    private volatile boolean reading;
+    private long readAt;
+    private int reads;
     private final android.util.SparseIntArray lampColors = new android.util.SparseIntArray();
     private int fps, fpsFrames;
 
@@ -144,7 +153,7 @@ final class CameraEngine {
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY).build();
         ResolutionSelector small = new ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
-                .setResolutionStrategy(new ResolutionStrategy(new Size(1280, 720),
+                .setResolutionStrategy(new ResolutionStrategy(new Size(1920, 1080),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build();
         preview = new Preview.Builder().setResolutionSelector(wide).setTargetRotation(rotation).build();
         preview.setSurfaceProvider(view.getSurfaceProvider());
@@ -227,14 +236,15 @@ final class CameraEngine {
             float horizon = prefs.horizon(), center = prefs.center(), hood = prefs.hood();
 
             Bitmap seen = enhance ? brighten(frame) : frame;
-            // take turns: whole frame, zoom on the road ahead, zoom higher up for traffic lights
+            // take turns: whole frame and road zoom most often, then overhead signals and roadside signs
             List<Detection> dets = new ArrayList<>();
-            int pass = (int) (frameCount++ % 3);
+            int pass = new int[]{0, 1, 2, 0, 1, 3}[(int) (frameCount++ % 6)];
             if (pass == 0) detect(seen, 0, 0, w, h, w, h, dets);
             else {
                 int cw = w / 2, ch = h / 2;
-                int cx = clamp(Math.round(center * w) - cw / 2, 0, w - cw);
-                int top = Math.round(horizon * h) - (pass == 1 ? ch * 2 / 5 : ch * 9 / 10);
+                int cx = pass == 3 ? w - cw : clamp(Math.round(center * w) - cw / 2, 0, w - cw);
+                int top = Math.round(horizon * h) - (pass == 2 ? ch * 9 / 10 : ch * 3 / 5);
+                if (pass == 1) top = Math.round(horizon * h) - ch * 2 / 5;
                 int cy = clamp(top, 0, h - ch);
                 Bitmap crop = Bitmap.createBitmap(seen, cx, cy, cw, ch);
                 detect(crop, cx, cy, cw, ch, w, h, dets);
@@ -273,30 +283,26 @@ final class CameraEngine {
 
             final boolean unclear = viewQuality.update(gray, lw, lh, sum / (float) px.length, hood, t);
 
-            // read every light just seen; larger and more central ones count for more
             Track ahead = null;
-            float[] votes = new float[4];
-            for (Track k : tracks) {
-                if (k.lead) ahead = k;
-                if (!k.label.equals("traffic light")) continue;
-                if (k.lastSeen == t && (k.right - k.left) * w >= 7) {
-                    int x = clamp((int) (k.left * w), 0, w - 2), y = clamp((int) (k.top * h), 0, h - 2);
-                    int bw = clamp((int) ((k.right - k.left) * w), 1, w - x), bh = clamp((int) ((k.bottom - k.top) * h), 1, h - y);
+            for (Track k : tracks) if (k.lead) ahead = k;
+            // only the one light judged to be ours is read
+            Track ours = signalPicker.pick(tracks, center, horizon, w);
+            int read = SignalColor.NONE;
+            if (ours != null) {
+                if (ours.lastSeen == t) {
+                    int x = clamp((int) (ours.left * w), 0, w - 2), y = clamp((int) (ours.top * h), 0, h - 2);
+                    int bw = clamp((int) ((ours.right - ours.left) * w), 1, w - x), bh = clamp((int) ((ours.bottom - ours.top) * h), 1, h - y);
                     int[] lp = new int[bw * bh];
                     // the untouched frame: night brightening would wash the lamp colour out
                     frame.getPixels(lp, 0, bw, x, y, bw, bh);
-                    int colour = SignalColor.classify(lp, bw, bh);
-                    lampColors.put(k.id, colour);
-                    float offset = Math.abs(k.cx() - center);
-                    if (offset < 0.35f && k.top < horizon) votes[colour] += bw * bh * (1f - 2f * offset);
+                    read = SignalColor.classify(lp, bw, bh);
+                    lampColors.put(ours.id, read);
                 }
-                k.signal = lampColors.get(k.id);
+                ours.signal = lampColors.get(ours.id);
             }
             if (lampColors.size() > 200) lampColors.clear();
-            int read = SignalColor.NONE;
-            for (int i = SignalColor.RED; i <= SignalColor.GREEN; i++)
-                if (votes[i] > 0 && (read == SignalColor.NONE || votes[i] > votes[read])) read = i;
             int light = signalState.update(read, t);
+            if (!reading && t - readAt > 600) readSigns(frame, horizon, t);
             if (ahead != null && ahead.hits >= 5) {
                 float bw = ahead.right - ahead.left, bh = ahead.bottom - ahead.top;
                 int x = clamp((int) ((ahead.left - bw * 0.08f) * w), 0, w - 2), y = clamp((int) ((ahead.top - bh * 0.08f) * h), 0, h - 2);
@@ -321,6 +327,36 @@ final class CameraEngine {
         } finally {
             image.close();
         }
+    }
+
+    /** Reads sign text from one side of the upper road view; the sides take turns. */
+    private void readSigns(Bitmap frame, float horizon, long t) {
+        readAt = t; reading = true;
+        int w = frame.getWidth(), h = frame.getHeight();
+        boolean right = reads++ % 3 != 2;
+        int cw = w / 2, x = right ? w - cw : w / 5;
+        int y = clamp((int) ((horizon - .33f) * h), 0, h - 2), ch = clamp((int) (.45f * h), 1, h - y);
+        Bitmap cut = Bitmap.createBitmap(frame, x, y, cw, ch);
+        // enlarging helps the recogniser with small, distant lettering
+        Bitmap big = Bitmap.createScaledBitmap(cut, cw * 2, ch * 2, true);
+        if (cut != big && cut != frame) cut.recycle();
+        try {
+            if (reader == null) reader = com.google.mlkit.vision.text.TextRecognition.getClient(
+                    com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS);
+            reader.process(com.google.mlkit.vision.common.InputImage.fromBitmap(big, 0)).addOnCompleteListener(task -> {
+                reading = false;
+                big.recycle();
+                if (closed || !task.isSuccessful()) return;
+                List<SignReader.Line> lines = new ArrayList<>();
+                for (com.google.mlkit.vision.text.Text.TextBlock b : task.getResult().getTextBlocks())
+                    for (com.google.mlkit.vision.text.Text.Line l : b.getLines()) {
+                        android.graphics.Rect r = l.getBoundingBox();
+                        if (r != null) lines.add(new SignReader.Line(l.getText(), r.left, r.top, r.right, r.bottom));
+                    }
+                List<SignReader.Sign> signs = signReader.read(lines, SystemClock.elapsedRealtime());
+                if (!signs.isEmpty()) listener.onSigns(signs);
+            });
+        } catch (RuntimeException e) { reading = false; Log.w(TAG, "signs", e); }
     }
 
     private void detect(Bitmap b, int ox, int oy, int cw, int ch, int w, int h, List<Detection> out) {

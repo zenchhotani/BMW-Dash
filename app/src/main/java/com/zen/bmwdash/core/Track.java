@@ -16,6 +16,10 @@ public final class Track {
     public boolean lead;
     /** lit colour for traffic lights, see SignalColor */
     public int signal;
+    /** the traffic light judged to be for our lane */
+    public boolean ours;
+    public static final int UNKNOWN = 0, MOVING = 1, STOPPED = 2, PARKED = 3;
+    public int motion;
     /** what this driver seems to be doing, empty when nothing notable */
     public String intent = "";
     /** metres right of our axis, NaN when unknown */
