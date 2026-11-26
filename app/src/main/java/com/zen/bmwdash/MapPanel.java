@@ -110,6 +110,7 @@ final class MapPanel extends FrameLayout {
                         PropertyFactory.fillExtrusionOpacity(0.75f));
                 s.addLayer(b);
             }
+            addRadar(s);
             s.addSource(new GeoJsonSource("turn"));
             s.addSource(new GeoJsonSource("alt"));
             s.addSource(new GeoJsonSource("route"));
@@ -127,6 +128,28 @@ final class MapPanel extends FrameLayout {
             s.addLayer(dot("car", "car", "#1C9BFF", 9f));
             drawAll();
         });
+    }
+
+    private long radarAt;
+
+    /** Rain and snow radar (US), from the Iowa Environmental Mesonet. */
+    private void addRadar(Style s) {
+        radarAt = android.os.SystemClock.elapsedRealtime();
+        if (!prefs.radar()) return;
+        // the changing query makes the map fetch fresh pictures
+        TileSet ts = new TileSet("2.2.0", "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=" + System.currentTimeMillis() / 300_000);
+        ts.setMaxZoom(10);
+        s.addSource(new RasterSource("radar", ts, 256));
+        RasterLayer r = new RasterLayer("radar", "radar");
+        r.setProperties(PropertyFactory.rasterOpacity(0.5f));
+        if (s.getLayer("alt") != null) s.addLayerBelow(r, "alt"); else s.addLayer(r);
+    }
+
+    void refreshRadar() {
+        if (style == null || !prefs.radar() || android.os.SystemClock.elapsedRealtime() - radarAt < 300_000) return;
+        style.removeLayer("radar");
+        style.removeSource("radar");
+        addRadar(style);
     }
 
     private static LineLayer line(String id, String source, int color, float width) {

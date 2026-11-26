@@ -20,6 +20,7 @@ public final class Safety {
         public double limit = Double.NaN;    // m/s
         public double safeGap = 2;           // seconds
         public int light;                    // SignalColor value
+        public double caution = 1;           // above 1 on slippery or low-visibility roads
     }
     public static final class Trip {
         public double meters, movingSec, speedingSec, closeSec, topSpeed;
@@ -67,7 +68,8 @@ public final class Safety {
             double closing = -lead.rangeRate, d = lead.distance;
             double ttc = closing > 1.5 ? d / closing : 99;
             double needed = closing > 1.5 ? closing * closing / (2 * Math.max(1, d - 4)) : 0;
-            boolean danger = d < 60 && (ttc < 2.5 || needed > 4);
+            double c = Math.max(1, in.caution);
+            boolean danger = d < 60 * c && (ttc < 2.5 * (1 + (c - 1) * .6) || needed > 4 / c);
             if (danger) {
                 if (dangerSince < 0) dangerSince = t;
                 if (t - dangerSince >= 250) {
@@ -76,7 +78,7 @@ public final class Safety {
                 }
             } else {
                 dangerSince = -1;
-                if (ttc < 4.5 && needed > 1.8) hold(new Event("slow", Advisor.WARN, "Slow down: closing on the car ahead", "Slow down"), t, 2000);
+                if (ttc < 4.5 * c && needed > 1.8 / c) hold(new Event("slow", Advisor.WARN, "Slow down: closing on the car ahead", "Slow down"), t, 2000);
             }
         } else dangerSince = -1;
 

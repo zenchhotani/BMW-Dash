@@ -54,6 +54,7 @@ import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 
 import com.zen.bmwdash.core.Advisor;
+import com.zen.bmwdash.core.Conditions;
 import com.zen.bmwdash.core.Geo;
 import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.Predictor;
@@ -88,7 +89,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private long showButtonsUntil;
     private TextView arButton;
     private SignalView signalView;
-    private TextView trafficChip;
+    private TextView trafficChip, weatherBanner, weatherButton;
+    private boolean viewBlocked, clearShown;
+    private int remindedKind;
+    private long bridgeSaidAt = -1000000, viewSaidAt = -1000000;
     private final Predictor predictor = new Predictor();
     private Safety.Event predicted;
     private long predictedAt;
@@ -241,6 +245,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         tc.gravity = Gravity.CENTER_HORIZONTAL;
         tc.topMargin = dp(6);
         top.addView(trafficChip, tc);
+        weatherBanner = chip("", Ui.CYAN);
+        weatherBanner.setTextSize(13);
+        weatherBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams wb = new LinearLayout.LayoutParams(-2, -2);
+        wb.gravity = Gravity.CENTER_HORIZONTAL;
+        wb.topMargin = dp(6);
+        top.addView(weatherBanner, wb);
         signalView = new SignalView(this);
         LinearLayout.LayoutParams sv = new LinearLayout.LayoutParams(dp(210), dp(48));
         sv.gravity = Gravity.CENTER_HORIZONTAL;
@@ -283,6 +294,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         buttons.addView(Ui.button(this, "⚙ Setup", Ui.BLUE, this::settingsDialog), margins(-2, -2, 6));
         nightButton = Ui.button(this, "\uD83C\uDF19 Auto", Ui.VIOLET, this::cycleNight);
         buttons.addView(nightButton, margins(-2, -2, 6));
+        weatherButton = Ui.button(this, "", Ui.CYAN, () -> {
+            prefs.edit().putInt("wxmode", (prefs.weatherMode() + 1) % 5).apply();
+            showWeatherLabel();
+            refresh();
+        });
+        showWeatherLabel();
+        buttons.addView(weatherButton, margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\uD83D\uDDFA Map", Ui.CYAN, this::cycleMap), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\u26A0 Report", Ui.AMBER, this::reportDialog), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "\uD83D\uDCCA Trip", Ui.GREEN, this::tripDialog), margins(-2, -2, 6));
@@ -317,7 +335,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         rlp.setMargins(dp(8), 0, dp(8), dp(8));
         mapPane.addView(routeScroll, rlp);
-        TextView credit = Ui.text(this, "© OpenStreetMap • OpenFreeMap • TomTom • Open-Meteo", 8, Ui.DIM, false);
+        TextView credit = Ui.text(this, "© OpenStreetMap • OpenFreeMap • TomTom • Open-Meteo • NWS • IEM radar", 8, Ui.DIM, false);
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         clp.setMargins(0, dp(48), dp(8), 0);
         mapPane.addView(credit, clp);
@@ -461,8 +479,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     @Override public void onProviderDisabled(@NonNull String p) { toast("Location is off"); }
     @Override @SuppressWarnings("deprecation") public void onStatusChanged(String p, int s, Bundle b) { }
 
-    @Override public void onScene(int signal, float bright) {
+    @Override public void onScene(int signal, float bright, boolean blocked) {
         light = signal;
+        viewBlocked = blocked;
         signalView.show(signal);
         brightness = bright;
         // hysteresis so auto night view does not flicker under street lamps
@@ -498,7 +517,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         Safety.Event guess = predictor.update(seenAt, speed, seen);
         if (guess != null) { predicted = guess; predictedAt = seenAt; }
         // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
-        overlay.show(seen, moving() || calibrating ? l : null, w, h, speed, prefs.mph());
+        overlay.show(seen, calibrating || (moving() && !lanesUnsafe(l)) ? l : null, w, h, speed, prefs.mph());
         visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
         visionChip.setTextColor(Ui.CYAN);
         refresh();
@@ -523,12 +542,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         gauges.mph = prefs.mph(); gauges.hasFix = fresh; gauges.speed = speed; gauges.limit = road.limit;
         gauges.flow = data.flow; gauges.freeFlow = data.freeFlow; gauges.hasKey = !prefs.tomtomKey().isEmpty();
         gauges.leadDistance = seeing && lead != null ? lead.distance : Float.NaN;
-        boolean laneKnown = seeing && moving() && lane != null && lane.position != LaneState.Position.UNKNOWN;
+        boolean hidden = seeing && lanesUnsafe(lane);
+        boolean laneKnown = seeing && moving() && !hidden && lane != null && lane.position != LaneState.Position.UNKNOWN;
         gauges.laneKnown = laneKnown; gauges.laneOffset = laneKnown ? lane.offset : 0; gauges.departing = laneKnown && lane.departing;
-        LaneState.LaneType type = seeing && moving() && lane != null ? lane.type : LaneState.LaneType.UNKNOWN;
+        LaneState.LaneType type = seeing && moving() && !hidden && lane != null ? lane.type : LaneState.LaneType.UNKNOWN;
         String where = type == LaneState.LaneType.LEFTMOST ? "LEFT LANE" : type == LaneState.LaneType.RIGHTMOST ? "RIGHT LANE"
                 : type == LaneState.LaneType.MIDDLE ? "MIDDLE LANE" : type == LaneState.LaneType.YELLOW_ON_RIGHT ? "CHECK SIDE" : "";
-        String how = !moving() ? "PARKED" : !laneKnown ? "SCANNING" : lane.position == LaneState.Position.CENTERED ? "CENTERED"
+        String how = !moving() ? "PARKED" : hidden ? "LANES NOT VISIBLE" : !laneKnown ? "SCANNING" : lane.position == LaneState.Position.CENTERED ? "CENTERED"
                 : lane.position == LaneState.Position.DRIFT_LEFT ? "DRIFT LEFT" : "DRIFT RIGHT";
         gauges.laneLabel = where.isEmpty() ? how : laneKnown && lane.position != LaneState.Position.CENTERED ? how : where;
         gauges.invalidate();
@@ -549,11 +569,14 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         Advisor.Input in = new Advisor.Input();
         in.speed = speed; in.limit = road.limit; in.flow = data.flow; in.freeFlow = data.freeFlow;
         in.lead = seeing ? lead : null;
-        in.laneDeparture = seeing && moving() && lane != null && lane.departing;
+        in.laneDeparture = seeing && moving() && !hidden && lane != null && lane.departing;
         in.laneType = type;
         if (data.weather != null) in.weather = data.weather.hazard;
         in.incident = hazardAhead();
-        if (data.weather != null) in.safeGap = data.weather.gap;
+        int kind = weatherKind();
+        boolean ice = data.weather != null && data.weather.ice && prefs.weatherMode() != 1;
+        in.safeGap = Conditions.gap(kind, ice);
+        in.suggested = Conditions.suggested(road.limit, kind);
         in.aheadFlow = data.aheadFlow;
         if (!data.trafficStatus.isEmpty()) in.incident = data.trafficStatus;
         guidance(in, fresh);
@@ -561,11 +584,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         Safety.Input s = new Safety.Input();
         s.t = now; s.speed = speed; s.seeing = seeing; s.tracks = tracks; s.limit = road.limit;
         s.safeGap = in.safeGap; s.light = seeing ? light : 0;
+        s.caution = Conditions.caution(kind, ice);
         Safety.Event event = safety.update(s);
         // a predicted move only takes the banner when nothing more serious is happening
         if (seeing && predicted != null && now - predictedAt < 3000 && (event == null || event.level < predicted.level))
             event = predicted;
         trafficAhead(fresh);
+        weatherSafety(kind, ice, road.limit, fresh, seeing, now);
         Advisor.Advice advice = Advisor.advise(in);
         if (event != null && event.level >= advice.level) {
             String text = event.text;
@@ -604,6 +629,74 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         carCard.setText("\uD83D\uDE98 " + name + "\n" + info);
         carCard.setVisibility(View.VISIBLE);
     }
+
+    private int weatherKind() {
+        int m = prefs.weatherMode();
+        if (m == 1) return Conditions.CLEAR;
+        if (m == 2) return Conditions.RAIN;
+        if (m == 3) return Conditions.SNOW;
+        if (m == 4) return Conditions.FOG;
+        return data.weather == null ? Conditions.CLEAR : data.weather.kind;
+    }
+
+    private void showWeatherLabel() {
+        weatherButton.setText("\u2614 " + new String[]{"Auto", "Off", "Rain", "Snow", "Fog"}[prefs.weatherMode()]);
+    }
+
+    /** Snow hides paint: only trust lanes there when both sides are really seen. */
+    private boolean lanesUnsafe(LaneState l) {
+        if (viewBlocked) return true;
+        int k = weatherKind();
+        return (k == Conditions.SNOW || k == Conditions.ICE) && l != null
+                && !(l.hasLeft && l.hasRight && !l.estimatedLeft && !l.estimatedRight);
+    }
+
+    /** One banner for weather mode, official alerts, what is coming and a blocked camera. */
+    private void weatherSafety(int kind, boolean ice, double limit, boolean fresh, boolean seeing, long now) {
+        map.refreshRadar();
+        StringBuilder b = new StringBuilder();
+        if (kind != Conditions.CLEAR) {
+            b.append(new String[]{"", "\u2614 RAIN MODE", "\u2744 SNOW MODE", "\u2744 ICE MODE", "\u2601 FOG MODE"}[kind]);
+            if (!Double.isNaN(limit)) {
+                // round down to a speed that can be read at a glance
+                double unit = prefs.mph() ? 2.23694 : 3.6;
+                long top = (long) (Conditions.suggested(limit, kind) * unit / 5) * 5;
+                if (top > 0) b.append("  \u2022  suggested ").append(top).append(' ').append(Ui.unit(prefs.mph()));
+            }
+            b.append("  \u2022  headlights on");
+        } else if (ice) b.append("\u2744 Near freezing: bridges and overpasses ice first");
+        if (!data.alerts.isEmpty()) {
+            RoadData.Alert a = data.alerts.get(0);
+            line(b, "\u26A0 " + a.event + (data.alerts.size() > 1 ? "  (+" + (data.alerts.size() - 1) + " more)" : ""));
+            if (prefs.voice() && announced.add("nws" + a.event)) say("National Weather Service alert: " + a.event);
+        }
+        if (!data.outlook.isEmpty()) {
+            line(b, "\u27A1 " + data.outlook);
+            if (prefs.voice() && speed > 3 && announced.add("out" + data.outlook.split(" in ")[0])) say(data.outlook);
+        }
+        boolean blind = seeing && viewBlocked && speed > 5;
+        if (blind) {
+            line(b, "\uD83D\uDEAB Camera view unclear: check the glass, do not rely on camera alerts");
+            if (now - viewSaidAt > 300_000) { viewSaidAt = now; if (prefs.voice()) say("Camera view unclear. Check the windshield."); }
+        }
+        if (ice && fresh && speed > 5 && headingValid && now - bridgeSaidAt > 60_000
+                && data.bridgeAhead(last.getLatitude(), last.getLongitude(), heading)) {
+            bridgeSaidAt = now;
+            toast("Bridge ahead: possible ice");
+            if (prefs.voice()) say("Bridge ahead. Possible ice.");
+        }
+        if (now - bridgeSaidAt < 12_000) line(b, "\u2744 Bridge ahead: possible ice");
+        if (kind != Conditions.CLEAR && kind != remindedKind && fresh && speed > 2) {
+            remindedKind = kind;
+            String tip = kind == Conditions.SNOW || kind == Conditions.ICE ? "Snow mode. Headlights on, and make sure all snow is cleared off the car."
+                    : (kind == Conditions.RAIN ? "Rain mode." : "Fog mode.") + " Turn your headlights on.";
+            if (prefs.voice()) say(tip); else toast(tip);
+        }
+        weatherBanner.setText(b);
+        weatherBanner.setVisibility(b.length() == 0 ? View.GONE : View.VISIBLE);
+    }
+
+    private static void line(StringBuilder b, String s) { if (b.length() > 0) b.append('\n'); b.append(s); }
 
     /** Nearest slow traffic, jam or closure further along, shown early so there is time to react or reroute. */
     private void trafficAhead(boolean fresh) {
@@ -790,7 +883,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         int m = prefs.night();
         int view = m == 0 ? (autoDark ? 1 : 0) : m - 1;
         if (camera != null) camera.setNight(view > 0);
-        if (view != nightShown) { nightShown = view; NightView.apply(preview, view); }
+        boolean clear = weatherKind() != Conditions.CLEAR;
+        if (view != nightShown || clear != clearShown) { nightShown = view; clearShown = clear; NightView.apply(preview, view, clear); }
     }
 
     private void say(String s) { if (ttsReady) tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, "dash"); }
@@ -1038,6 +1132,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         CheckBox voice = check(p, "Spoken alerts and directions", prefs.voice());
         CheckBox auto = check(p, "Start recording when the app opens", prefs.autoRecord());
         CheckBox dark = check(p, "Dark map", prefs.mapDark());
+        CheckBox radar = check(p, "Rain and snow radar on map (US)", prefs.radar());
         p.addView(Ui.text(this, "Loop recording storage in GB (locked clips are kept)", 12, Ui.DIM, false));
         EditText gb = new EditText(this);
         gb.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -1051,7 +1146,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             try { g = Math.max(1, Math.min(200, Integer.parseInt(gb.getText().toString().trim()))); } catch (NumberFormatException ignored) { }
             prefs.edit().putString("tomtom", key.getText().toString().trim()).putBoolean("mph", mph.isChecked())
                     .putBoolean("voice", voice.isChecked()).putBoolean("autorec", auto.isChecked())
-                    .putBoolean("dark", dark.isChecked()).putInt("gb", g)
+                    .putBoolean("dark", dark.isChecked()).putBoolean("radar", radar.isChecked()).putInt("gb", g)
                     .putString("aikey", ai.getText().toString().trim()).putString("sos", contact.getText().toString().trim()).apply();
             carId.reset();
             data.refreshNow();

@@ -53,6 +53,7 @@ import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.SignalColor;
 import com.zen.bmwdash.core.SignalState;
 import com.zen.bmwdash.core.Track;
+import com.zen.bmwdash.core.ViewQuality;
 import com.zen.bmwdash.core.Tracker;
 
 import java.text.SimpleDateFormat;
@@ -73,7 +74,7 @@ final class CameraEngine {
         void onVision(List<Track> tracks, LaneState lane, int w, int h, int fps);
         void onRecording(boolean recording, long seconds, boolean locked);
         void onError(String message);
-        void onScene(int light, float brightness);
+        void onScene(int light, float brightness, boolean blocked);
         /** ask first: is a picture of this lead car wanted? */
         boolean wantsCar(int id, int widthPx);
         void onCarPicture(int id, Bitmap crop, int widthPx);
@@ -109,6 +110,7 @@ final class CameraEngine {
     private boolean wantRecording, lockCurrent, closed, paused;
     private long frameCount, fpsStart;
     private List<Track> recent = new ArrayList<>();
+    private final ViewQuality viewQuality = new ViewQuality();
     private final SignalState signalState = new SignalState();
     private final android.util.SparseIntArray lampColors = new android.util.SparseIntArray();
     private int fps, fpsFrames;
@@ -269,6 +271,8 @@ final class CameraEngine {
 
             brightness += 0.05f * (sum / (float) px.length - brightness);
 
+            final boolean blocked = viewQuality.update(gray, lw, lh, sum / (float) px.length, hood, t);
+
             // read every light just seen; larger and more central ones count for more
             Track ahead = null;
             float[] votes = new float[4];
@@ -311,7 +315,7 @@ final class CameraEngine {
             // the lane state is written on this thread; give the screen its own copy
             final LaneState laneNow = laneState.snapshot();
             final float bright = brightness;
-            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright); listener.onVision(tracks, laneNow, fw, fh, rate); } });
+            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright, blocked); listener.onVision(tracks, laneNow, fw, fh, rate); } });
         } catch (Exception e) {
             Log.e(TAG, "analyze", e);
         } finally {

@@ -22,6 +22,8 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 - Stronger lane finding: faded paint, shade, dash gaps; a dashed on-screen line means estimated
 - Predictions for drivers ahead: cutting in, changing lanes, slowing, stopped, weaving
 - Early warning of slow traffic, jams and closures further along (needs a TomTom key)
+- Weather Mode (auto or manual rain/snow/fog): Clear View filter, earlier alerts, suggested speed, reminders
+- National Weather Service alerts, rain/snow radar, forecast along the route, bridge ice and blocked-camera warnings
 - Voice and live destination search, with a focused 3D guidance view
 - 3D route arrows and turn signs drawn on the camera picture; Map button for small, large or hidden map; 3D route on/off button
 

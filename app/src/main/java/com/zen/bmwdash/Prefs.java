@@ -22,6 +22,9 @@ final class Prefs {
     String sosNumber() { return p.getString("sos", "").trim(); }
     /** 0 auto, 1 off, 2 night boost, 3 green night view */
     int night() { return p.getInt("night", 0); }
+    /** 0 auto, 1 off, 2 rain, 3 snow, 4 fog */
+    int weatherMode() { return p.getInt("wxmode", 0); }
+    boolean radar() { return p.getBoolean("radar", true); }
     String reports() { return p.getString("reports", ""); }
     String home() { return p.getString("home", ""); }
     String work() { return p.getString("work", ""); }

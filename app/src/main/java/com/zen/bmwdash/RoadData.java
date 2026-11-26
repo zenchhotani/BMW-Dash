@@ -5,6 +5,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 
+import com.zen.bmwdash.core.Conditions;
 import com.zen.bmwdash.core.Geo;
 
 import org.json.JSONArray;
@@ -18,6 +19,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -30,7 +32,9 @@ import java.util.concurrent.Executors;
  */
 final class RoadData {
     static final class Road { String name = ""; double limit = Double.NaN; int lanes; boolean oneway; }
-    static final class Weather { String summary = "", hazard; double temp = Double.NaN, gap = 2; }
+    static final class Weather { String summary = "", hazard; double temp = Double.NaN, gap = 2; int kind; boolean ice; }
+    /** an official National Weather Service alert */
+    static final class Alert { String event = "", headline = ""; int severity; }
     static final class Incident { double lat, lon; String text, title; int severity, category; }
     static final class Camera { double lat, lon; }
     /** slow traffic found further along; speeds in m/s */
@@ -70,13 +74,17 @@ final class RoadData {
     List<Jam> jams = new ArrayList<>();
     /** active route, or null; traffic is sampled along it */
     double[][] path;
-    private long aheadTime = -1000000;
+    private long aheadTime = -1000000, alertTime = -1000000, outlookTime = -1000000;
+    List<Alert> alerts = new ArrayList<>();
+    /** first change in weather further along the route, empty when none */
+    String outlook = "";
+    private double[][] outlookRoute;
     String trafficStatus = "";
     Runnable onChange = () -> {};
 
     RoadData(Prefs p) { prefs = p; }
 
-    void refreshNow() { flowTime = incidentTime = tomTry = nomTry = aheadTime = -1000000; trafficStatus = roadProblem = ""; }
+    void refreshNow() { flowTime = incidentTime = tomTry = nomTry = aheadTime = alertTime = outlookTime = -1000000; trafficStatus = roadProblem = ""; }
 
     /** Call on the main thread with each location fix; throttles itself. */
     void update(double lat, double lon, double heading, boolean headingValid) {
@@ -119,6 +127,14 @@ final class RoadData {
             }
             if (now - incidentTime > 120_000) { incidentTime = now; livePool.execute(() -> fetchIncidents(lat, lon, key)); }
         } else { flow = freeFlow = aheadFlow = Double.NaN; incidents = new ArrayList<>(); jams = new ArrayList<>(); }
+        if (now - alertTime > 300_000) { alertTime = now; userPool.execute(() -> fetchAlerts(lat, lon)); }
+        double[][] route = path;
+        if (route == null) { outlook = ""; outlookRoute = null; }
+        else if (route != outlookRoute || now - outlookTime > 900_000) {
+            if (route != outlookRoute) outlook = "";
+            outlookRoute = route; outlookTime = now;
+            livePool.execute(() -> fetchOutlook(lat, lon, route));
+        }
         if (now - weatherTime > 600_000) { weatherTime = now; livePool.execute(() -> fetchWeather(lat, lon)); }
     }
 
@@ -361,15 +377,96 @@ final class RoadData {
             else if ((code >= 51 && code <= 65) || (code >= 80 && code <= 82)) { icon = "☂ Rain"; w.hazard = "Wet road: leave extra distance"; }
             else if (code == 45 || code == 48) { icon = "☁ Fog"; w.hazard = "Fog: reduce speed"; }
             else icon = code <= 1 ? "☀ Clear" : "☁ Cloudy";
+            w.kind = Conditions.kind(code);
+            if (w.kind == Conditions.CLEAR && vis < 1000) w.kind = Conditions.FOG;
+            w.ice = Conditions.iceRisk(celsius);
             if (w.hazard == null && celsius <= 1.5) w.hazard = "Near freezing: watch for ice";
             if (w.hazard == null && vis < 1000) w.hazard = "Low visibility ahead";
             if (w.hazard == null && gust > 40) w.hazard = "Strong wind gusts";
-            if ((code >= 71 && code <= 77) || code == 85 || code == 86 || code == 56 || code == 57 || code == 66 || code == 67 || celsius <= 0) w.gap = 5;
-            else if (code == 45 || code == 48 || vis < 1000) w.gap = 3.5;
-            else if ((code >= 51 && code <= 65) || (code >= 80 && code <= 82) || code >= 95) w.gap = 3;
+            w.gap = Conditions.gap(w.kind, w.ice);
             w.summary = icon + "  " + Math.round(w.temp) + "°";
             main.post(() -> { weather = w; onChange.run(); });
         } catch (Exception e) { weatherTime = SystemClock.elapsedRealtime() - 570_000; Log.w(TAG, "weather " + e.getMessage()); }
+    }
+
+    /** National Weather Service alerts for this spot (United States only, no key needed). */
+    private void fetchAlerts(double lat, double lon) {
+        try {
+            String u = String.format(Locale.US, "https://api.weather.gov/alerts/active?point=%.4f,%.4f", lat, lon);
+            JSONArray a = new JSONObject(http(u, null)).getJSONArray("features");
+            List<Alert> found = new ArrayList<>();
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject p = a.getJSONObject(i).getJSONObject("properties");
+                if (!"Actual".equals(p.optString("status", "Actual"))) continue;
+                Alert al = new Alert();
+                al.event = p.optString("event"); al.headline = p.optString("headline");
+                String s = p.optString("severity");
+                al.severity = s.equals("Extreme") ? 4 : s.equals("Severe") ? 3 : s.equals("Moderate") ? 2 : 1;
+                // alerts that change how you should drive come first
+                if (al.event.matches("(?i).*(snow|ice|winter|blizzard|flood|fog|tornado|thunderstorm|wind|freez|squall|hurricane).*")) al.severity += 4;
+                found.add(al);
+            }
+            Collections.sort(found, (x, y) -> y.severity - x.severity);
+            main.post(() -> { alerts = found; onChange.run(); });
+        } catch (Exception e) { Log.w(TAG, "alerts " + e.getMessage()); }
+    }
+
+    /** Forecast at points along the route for about the time we should reach them. */
+    private void fetchOutlook(double lat, double lon, double[][] route) {
+        try {
+            double start = Geo.project(route, lat, lon)[1];
+            StringBuilder la = new StringBuilder(String.format(Locale.US, "%.3f", lat)), lo = new StringBuilder(String.format(Locale.US, "%.3f", lon));
+            List<Double> at = new ArrayList<>();
+            at.add(0.0);
+            for (double d : new double[]{8000, 20000, 40000, 70000, 110000, 160000}) {
+                double[][] bit = Geo.slice(route, start + d, start + d + 100);
+                if (bit.length < 2) break;
+                la.append(String.format(Locale.US, ",%.3f", bit[0][0])); lo.append(String.format(Locale.US, ",%.3f", bit[0][1]));
+                at.add(d);
+            }
+            String text = "";
+            if (at.size() > 1) {
+                String u = "https://api.open-meteo.com/v1/forecast?latitude=" + la + "&longitude=" + lo
+                        + "&hourly=weather_code,temperature_2m&forecast_hours=8&timeformat=unixtime";
+                JSONArray a = new JSONArray(http(u, null));
+                int here = Conditions.CLEAR;
+                for (int i = 0; i < a.length() && i < at.size(); i++) {
+                    JSONObject h = a.getJSONObject(i).getJSONObject("hourly");
+                    JSONArray time = h.getJSONArray("time"), code = h.getJSONArray("weather_code"), temp = h.getJSONArray("temperature_2m");
+                    // rough arrival time at about 70 km/h
+                    long eta = System.currentTimeMillis() / 1000 + (long) (at.get(i) / 19.5);
+                    int best = 0;
+                    for (int k = 1; k < time.length(); k++) if (Math.abs(time.getLong(k) - eta) < Math.abs(time.getLong(best) - eta)) best = k;
+                    int kind = Conditions.kind(code.optInt(best));
+                    if (kind == Conditions.CLEAR && Conditions.iceRisk(temp.optDouble(best))) kind = Conditions.ICE;
+                    if (i == 0) { here = kind; continue; }
+                    if (kind == Conditions.CLEAR || kind == here) continue;
+                    String what = kind == Conditions.SNOW ? "Snow" : kind == Conditions.RAIN ? "Rain" : kind == Conditions.FOG ? "Fog" : "Icy conditions";
+                    String miles = prefs.mph() ? Math.round(at.get(i) / 1609.344) + " miles" : Math.round(at.get(i) / 1000) + " kilometres";
+                    text = what + " likely in about " + miles + ", around " + new java.text.SimpleDateFormat("h:mm a", Locale.US).format(new java.util.Date(eta * 1000));
+                    break;
+                }
+            }
+            String result = text;
+            main.post(() -> { if (outlookRoute == route) { outlook = result; onChange.run(); } });
+        } catch (Exception e) { Log.w(TAG, "outlook " + e.getMessage()); }
+    }
+
+    /** True when a mapped bridge lies just ahead. */
+    boolean bridgeAhead(double lat, double lon, double heading) {
+        if (ways == null) return false;
+        for (int i = 0; i < ways.length(); i++) {
+            JSONObject w = ways.optJSONObject(i), t = w == null ? null : w.optJSONObject("tags");
+            if (t == null || !(t.optString("bridge").equals("yes") || t.optString("bridge").equals("viaduct"))) continue;
+            JSONArray g = w.optJSONArray("geometry");
+            for (int j = 0; g != null && j < g.length(); j++) {
+                JSONObject n = g.optJSONObject(j);
+                if (n == null) continue;
+                double d = Geo.distance(lat, lon, n.optDouble("lat"), n.optDouble("lon"));
+                if (d > 20 && d < 250 && Math.abs(((Geo.bearing(lat, lon, n.optDouble("lat"), n.optDouble("lon")) - heading + 540) % 360) - 180) < 15) return true;
+            }
+        }
+        return false;
     }
 
     private int searchSeq;

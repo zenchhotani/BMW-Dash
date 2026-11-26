@@ -148,6 +148,22 @@ public class CoreTest {
         pr = new Predictor(); pe = null;
         for (int ms = 0; ms <= 3000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(5, 25, 3.5f - ms / 1000f, 0), car(6, 25, -2f - ms / 1000f, 0))); if (x != null) pe = x; }
         check("own turn ignored", pe == null);
+        check("weather kinds", Conditions.kind(0) == Conditions.CLEAR && Conditions.kind(63) == Conditions.RAIN && Conditions.kind(73) == Conditions.SNOW
+                && Conditions.kind(66) == Conditions.ICE && Conditions.kind(45) == Conditions.FOG && Double.isNaN(Conditions.suggested(25, Conditions.CLEAR)));
+        // closing gently: quiet when dry, warns earlier in snow
+        Safety.Event dry = null, snowy = null;
+        for (double caution : new double[]{1, 1.5}) {
+            Safety sf = new Safety(); Safety.Event got = null; Track c = car(9, 38, 0, -10); c.lead = true;
+            for (int ms = 0; ms <= 600; ms += 100) { Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 20; si.seeing = true; si.tracks = List.of(c); si.caution = caution; got = sf.update(si); }
+            if (caution == 1) dry = got; else snowy = got;
+        }
+        check("earlier warning in snow", dry == null && snowy != null);
+        ViewQuality vq = new ViewQuality(); int[] fog = new int[W*H]; java.util.Arrays.fill(fog, 150); boolean blind = false;
+        for (int ms = 0; ms <= 8000; ms += 200) blind = vq.update(fog, W, H, 150, .9f, ms);
+        check("blocked view", blind);
+        int[] busy = new int[W*H]; for (int i = 0; i < busy.length; i++) busy[i] = (i % W / 6) % 2 == 0 ? 60 : 180;
+        for (int ms = 8200; ms <= 12000; ms += 200) blind = vq.update(busy, W, H, 120, .9f, ms);
+        check("view recovers", !blind);
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

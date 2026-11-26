@@ -15,6 +15,7 @@ public final class Advisor {
         public String incident; // nearby incident text or null
         public double safeGap = 2; // seconds, longer in bad weather
         public double aheadFlow = Double.NaN; // live traffic speed further up the road
+        public double suggested = Double.NaN; // sensible top speed for the weather
     }
 
     public static final class Advice {
@@ -38,6 +39,8 @@ public final class Advisor {
         }
         if (!Double.isNaN(in.limit) && in.speed > in.limit + 4.5)
             return new Advice(WARN, "Over the speed limit", "Check your speed");
+        if (!Double.isNaN(in.suggested) && moving && in.speed > in.suggested + 2.2)
+            return new Advice(WARN, "Ease off for the weather", "Slow down for the weather");
         if (!Double.isNaN(in.aheadFlow) && in.speed > in.aheadFlow + 9)
             return new Advice(WARN, "Traffic is slow ahead: ease off now", "Slow traffic ahead");
         if (in.incident != null) return new Advice(INFO, in.incident, null);
