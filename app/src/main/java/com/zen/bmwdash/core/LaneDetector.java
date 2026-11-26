@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Lightweight lane-marking finder: bright/yellow ridge points below the horizon,
- * a Hough vote over (x at bottom, x at horizon), then least-squares refinement.
+ * Lane-marking finder: contrast-adaptive bright/yellow ridge points below the horizon,
+ * a Hough vote over (x at bottom, x at horizon), least-squares refinement, and
+ * tracking of the previous frame's lines through gaps. Keeps state between frames.
  */
 public final class LaneDetector {
     public static final class Line {
@@ -23,6 +24,13 @@ public final class LaneDetector {
     private static final int XV = 17, XB = 120;
     private static final float XB_MIN = -0.7f, XB_MAX = 1.7f;
 
+    private Line lastLeft, lastRight;
+    private int missLeft, missRight;
+    /** learned difference between the calibrated horizon and where the lines really meet */
+    private float tilt;
+    /** boxes {left, top, right, bottom} whose edges must not be read as paint, e.g. vehicles */
+    public List<float[]> ignore = new ArrayList<>();
+
     /**
      * @param gray    w*h luminance 0..255
      * @param yellow  w*h, true where the pixel looks like yellow paint
@@ -31,6 +39,8 @@ public final class LaneDetector {
      * @param center  x of the car's own axis in the frame, 0..1
      */
     public Result detect(int[] gray, boolean[] yellow, int w, int h, float horizon, float bottom, float center) {
+        float calibrated = horizon;
+        horizon += tilt;
         int hy = Math.round(horizon * h);
         int y0 = Math.min(h - 2, hy + Math.max(4, Math.round(0.07f * h)));
         int y1 = Math.min(h - 1, Math.round(bottom * h));
@@ -43,22 +53,27 @@ public final class LaneDetector {
             rows++;
             int mw = Math.max(3, Math.round(0.00032f * w * (y - hy) + 2));
             int base = y * w;
-            int bestX = -1, bestR = 0;
+            // threshold follows this row's own noise, so faded paint in shade or at night still shows
+            long rough = 0;
+            for (int x = 2; x < w; x++) rough += Math.abs(gray[base + x] - gray[base + x - 2]);
+            int th = Math.max(13, Math.min(30, Math.round(2.4f * rough / (w - 2))));
+            int bestR = 0;
+            long sumX = 0, sumR = 0;
             for (int x = mw; x < w - mw; x++) {
                 int v = value(gray, yellow, base + x);
                 int dl = v - value(gray, yellow, base + x - mw);
                 int dr = v - value(gray, yellow, base + x + mw);
-                int r = (dl > 22 && dr > 22) ? dl + dr - Math.abs(dl - dr) : 0;
+                int r = (dl > th && dr > th) ? dl + dr - Math.abs(dl - dr) : 0;
                 if (r > 0) {
-                    if (r > bestR) { bestR = r; bestX = x; }
-                } else if (bestX >= 0) {
-                    pts.add(new int[]{bestX, y, yellow[base + bestX] ? 1 : 0});
-                    bestX = -1; bestR = 0;
+                    bestR = Math.max(bestR, r); sumX += (long) x * r; sumR += r;
+                } else if (bestR > 0) {
+                    add(pts, (int) (sumX / sumR), y, w, h, yellow);
+                    bestR = 0; sumX = sumR = 0;
                 }
             }
-            if (bestX >= 0) pts.add(new int[]{bestX, y, yellow[base + bestX] ? 1 : 0});
+            if (bestR > 0) add(pts, (int) (sumX / sumR), y, w, h, yellow);
         }
-        if (pts.size() < 6) return res;
+        if (pts.size() < 6) { forget(); return res; }
 
         float yb = (float) y1 / h;
         int[][] acc = new int[XV][XB];
@@ -79,16 +94,55 @@ public final class LaneDetector {
             }
         }
 
-        int need = Math.max(8, Math.round(rows * 0.22f) * 2);
+        int need = Math.max(8, Math.round(rows * 0.18f) * 2);
         res.left = pick(acc, pts, w, h, horizon, yb, center, rows, need, true);
         res.right = pick(acc, pts, w, h, horizon, yb, center, rows, need, false);
+        // prefer continuing the line we already had: it survives dash gaps and stray marks
+        Line tl = follow(lastLeft, pts, w, h, horizon, yb, center, rows);
+        Line tr = follow(lastRight, pts, w, h, horizon, yb, center, rows);
+        res.left = choose(res.left, tl, yb, center, true);
+        res.right = choose(res.right, tr, yb, center, false);
         if (res.left != null && res.right != null) {
             float width = res.right.x(yb) - res.left.x(yb);
             if (width < 0.28f || width > 1.6f) {
                 if (res.left.support >= res.right.support) res.right = null; else res.left = null;
             }
         }
+        if (res.left != null) { lastLeft = res.left; missLeft = 0; } else if (++missLeft > 8) lastLeft = null;
+        if (res.right != null) { lastRight = res.right; missRight = 0; } else if (++missRight > 8) lastRight = null;
+        // learn the real horizon (road slope, mount angle) from where the two lines meet
+        if (res.left != null && res.right != null && Math.abs(res.left.b - res.right.b) > 0.4f) {
+            float meet = (res.right.a - res.left.a) / (res.left.b - res.right.b);
+            float want = Math.max(-0.07f, Math.min(0.07f, meet - calibrated));
+            tilt += 0.04f * (want - tilt);
+        }
         return res;
+    }
+
+    private void forget() {
+        if (++missLeft > 8) lastLeft = null;
+        if (++missRight > 8) lastRight = null;
+    }
+
+    private void add(List<int[]> pts, int x, int y, int w, int h, boolean[] yellow) {
+        float fx = (float) x / w, fy = (float) y / h;
+        for (float[] b : ignore) if (fx > b[0] && fx < b[2] && fy > b[1] && fy < b[3]) return;
+        pts.add(new int[]{x, y, yellow[y * w + x] ? 1 : 0});
+    }
+
+    private Line follow(Line last, List<int[]> pts, int w, int h, float horizon, float yb, float center, int rows) {
+        if (last == null) return null;
+        float xv = last.x(horizon);
+        return refine(pts, w, h, horizon, yb, last.x(yb), xv, center, rows, 0.12f);
+    }
+
+    private static Line choose(Line fresh, Line tracked, float yb, float center, boolean left) {
+        if (tracked != null && (left ? tracked.x(yb) > center - 0.03f : tracked.x(yb) < center + 0.03f)) tracked = null;
+        if (tracked == null) return fresh;
+        if (fresh == null) return tracked;
+        // a clearly stronger line closer to the car wins, for example after a lane change
+        boolean closer = Math.abs(fresh.x(yb) - center) < Math.abs(tracked.x(yb) - center) - 0.08f;
+        return closer && fresh.support > 0.3f || fresh.support > tracked.support + 0.2f ? fresh : tracked;
     }
 
     private static int value(int[] gray, boolean[] yellow, int i) {
@@ -122,14 +176,15 @@ public final class LaneDetector {
             }
             float pxb = XB_MIN + (peak + 0.5f) * binW;
             float xv = center - 0.16f + 0.02f * bestV[peak];
-            Line line = refine(pts, w, h, horizon, yb, pxb, xv, rows);
+            Line line = refine(pts, w, h, horizon, yb, pxb, xv, center, rows, 0.17f);
             if (line != null) return line;
             j = peak + step * 3;
         }
         return null;
     }
 
-    private Line refine(List<int[]> pts, int w, int h, float horizon, float yb, float xb, float xv, int rows) {
+    private Line refine(List<int[]> pts, int w, int h, float horizon, float yb, float xb, float xv, float center,
+                        int rows, float minSupport) {
         float b = (xb - xv) / (yb - horizon), a = xv - b * horizon;
         int used = 0, yel = 0;
         for (int pass = 0; pass < 2; pass++) {
@@ -150,7 +205,8 @@ public final class LaneDetector {
             a = (float) ((sx - b * sy) / n);
         }
         float support = (float) used / rows;
-        if (support < 0.2f) return null;
+        // real lane lines head towards the middle of the road ahead
+        if (support < minSupport || Math.abs(a + b * horizon - center) > 0.3f) return null;
         return new Line(a, b, Math.min(1f, support), (float) yel / used);
     }
 }

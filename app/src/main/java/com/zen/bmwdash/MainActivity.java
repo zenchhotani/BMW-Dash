@@ -56,6 +56,7 @@ import androidx.activity.OnBackPressedCallback;
 import com.zen.bmwdash.core.Advisor;
 import com.zen.bmwdash.core.Geo;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.Predictor;
 import com.zen.bmwdash.core.Safety;
 import android.graphics.Bitmap;
 import android.os.VibrationEffect;
@@ -87,6 +88,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private long showButtonsUntil;
     private TextView arButton;
     private SignalView signalView;
+    private TextView trafficChip;
+    private final Predictor predictor = new Predictor();
+    private Safety.Event predicted;
+    private long predictedAt;
     private boolean navShown;
     private LinearLayout routeRow;
 
@@ -229,6 +234,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         LinearLayout.LayoutParams cc = new LinearLayout.LayoutParams(-2, -2);
         cc.topMargin = dp(6);
         top.addView(carCard, cc);
+        trafficChip = chip("", Ui.AMBER);
+        trafficChip.setTextSize(13);
+        trafficChip.setVisibility(View.GONE);
+        LinearLayout.LayoutParams tc = new LinearLayout.LayoutParams(-2, -2);
+        tc.gravity = Gravity.CENTER_HORIZONTAL;
+        tc.topMargin = dp(6);
+        top.addView(trafficChip, tc);
         signalView = new SignalView(this);
         LinearLayout.LayoutParams sv = new LinearLayout.LayoutParams(dp(210), dp(48));
         sv.gravity = Gravity.CENTER_HORIZONTAL;
@@ -440,6 +452,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         last = l;
         lastFixTime = now;
         map.location(l.getLatitude(), l.getLongitude(), heading, speed);
+        data.path = routes.isEmpty() ? null : routes.get(selected).points;
         data.update(l.getLatitude(), l.getLongitude(), heading, headingValid);
         checkOffRoute();
         refresh();
@@ -481,6 +494,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         for (Track t : seen) { if (t.lead) lead = t; if (t.isVehicle()) cars++; }
         lastVision = SystemClock.elapsedRealtime();
         overlay.calibration(calibrating, prefs.horizon(), prefs.center(), prefs.hood());
+        long seenAt = SystemClock.elapsedRealtime();
+        Safety.Event guess = predictor.update(seenAt, speed, seen);
+        if (guess != null) { predicted = guess; predictedAt = seenAt; }
         // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
         overlay.show(seen, moving() || calibrating ? l : null, w, h, speed, prefs.mph());
         visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
@@ -546,6 +562,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         s.t = now; s.speed = speed; s.seeing = seeing; s.tracks = tracks; s.limit = road.limit;
         s.safeGap = in.safeGap; s.light = seeing ? light : 0;
         Safety.Event event = safety.update(s);
+        // a predicted move only takes the banner when nothing more serious is happening
+        if (seeing && predicted != null && now - predictedAt < 3000 && (event == null || event.level < predicted.level))
+            event = predicted;
+        trafficAhead(fresh);
         Advisor.Advice advice = Advisor.advise(in);
         if (event != null && event.level >= advice.level) {
             String text = event.text;
@@ -583,6 +603,46 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
                 + (speed > 3 ? String.format(Locale.US, "   \u2022   %.1f s gap", lead.distance / speed) : "");
         carCard.setText("\uD83D\uDE98 " + name + "\n" + info);
         carCard.setVisibility(View.VISIBLE);
+    }
+
+    /** Nearest slow traffic, jam or closure further along, shown early so there is time to react or reroute. */
+    private void trafficAhead(boolean fresh) {
+        if (last == null || !fresh) { trafficChip.setVisibility(View.GONE); return; }
+        double best = 1e9;
+        String text = null, key = null, spoken = null;
+        for (RoadData.Jam j : data.jams) {
+            double d = further(j.lat, j.lon);
+            if (d < 150 || d >= best) continue;
+            best = d; key = "j" + Math.round(j.lat * 100) + "," + Math.round(j.lon * 100);
+            text = "Slow traffic in " + Ui.distance(d, prefs.mph()) + "  \u2022  " + Ui.speed(j.speed, prefs.mph()) + " " + Ui.unit(prefs.mph())
+                    + " (usually " + Ui.speed(j.free, prefs.mph()) + ")";
+            spoken = "Slow traffic ahead in " + spokenDistance(d);
+        }
+        for (RoadData.Incident i : data.incidents) {
+            if (i.category != 6 && i.category != 8 && i.category != 1) continue;
+            double d = further(i.lat, i.lon);
+            if (d < 150 || d >= best) continue;
+            best = d; key = "t" + i.category + Math.round(i.lat * 100) + "," + Math.round(i.lon * 100);
+            text = i.title + " in " + Ui.distance(d, prefs.mph());
+            // nearer ones are already announced by the hazard warning
+            spoken = d > 1600 ? i.title + " ahead in " + spokenDistance(d) : null;
+        }
+        if (text == null) { trafficChip.setVisibility(View.GONE); return; }
+        trafficChip.setText("\uD83D\uDEA6 " + text);
+        trafficChip.setVisibility(View.VISIBLE);
+        if (spoken != null && speed > 3 && prefs.voice() && announced.add(key)) say(spoken);
+    }
+
+    private String spokenDistance(double d) { return Ui.distance(d, prefs.mph()).replace(" mi", " miles").replace(" ft", " feet"); }
+
+    /** metres to a point further along the route (or ahead of us without one), -1 if not on the way */
+    private double further(double lat, double lon) {
+        if (routes.isEmpty()) return headingValid ? ahead(lat, lon, 5500) : -1;
+        double[][] path = routes.get(selected).points;
+        double[] there = Geo.project(path, lat, lon);
+        if (there[0] > 60) return -1;
+        double d = there[1] - Geo.project(path, last.getLatitude(), last.getLongitude())[1];
+        return d > 0 && d < 8000 ? d : -1;
     }
 
     /** Closest closure, incident, speed camera or saved report in front of us; speaks each one once. */

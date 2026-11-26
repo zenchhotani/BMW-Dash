@@ -108,6 +108,7 @@ final class CameraEngine {
     static { for (int i = 0; i < 256; i++) LUT[i] = (int) Math.round(255 * Math.pow(i / 255.0, 0.55)); }
     private boolean wantRecording, lockCurrent, closed, paused;
     private long frameCount, fpsStart;
+    private List<Track> recent = new ArrayList<>();
     private final SignalState signalState = new SignalState();
     private final android.util.SparseIntArray lampColors = new android.util.SparseIntArray();
     private int fps, fpsFrames;
@@ -254,11 +255,17 @@ final class CameraEngine {
                 int lum = (r * 77 + g * 150 + b * 29) >> 8;
                 sum += lum;
                 gray[i] = enhance ? LUT[lum] : lum;
-                yellow[i] = r > 90 && g > 70 && r - b > 40 && g - b > 25 && r >= g - 10 && r - g < 80;
+                // by proportion, so yellow paint still counts in shade
+                yellow[i] = r > 65 && g > 50 && (r - b) * 4 > r && g - b > 15 && r >= g - 10 && (r - g) * 5 < r * 2;
             }
+            List<float[]> blocked = new ArrayList<>();
+            for (Track k : recent)
+                if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
+            laneDetector.ignore = blocked;
             LaneDetector.Result res = laneDetector.detect(gray, yellow, lw, lh, horizon, hood, center);
             laneState.update(res, t, center, hood);
             List<Track> tracks = tracker.update(dets, t, laneState);
+            recent = tracks;
 
             brightness += 0.05f * (sum / (float) px.length - brightness);
 
@@ -301,8 +308,10 @@ final class CameraEngine {
             fpsFrames++;
             if (t - fpsStart >= 1000) { fps = (int) Math.round(fpsFrames * 1000.0 / (t - fpsStart)); fpsFrames = 0; fpsStart = t; }
             final int fw = w, fh = h, rate = fps, signalNow = light;
+            // the lane state is written on this thread; give the screen its own copy
+            final LaneState laneNow = laneState.snapshot();
             final float bright = brightness;
-            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright); listener.onVision(tracks, laneState, fw, fh, rate); } });
+            main.post(() -> { if (!closed) { listener.onScene(signalNow, bright); listener.onVision(tracks, laneNow, fw, fh, rate); } });
         } catch (Exception e) {
             Log.e(TAG, "analyze", e);
         } finally {

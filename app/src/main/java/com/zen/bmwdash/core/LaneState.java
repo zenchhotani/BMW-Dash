@@ -10,7 +10,7 @@ public final class LaneState {
         long seen = -10000, since = -1;
         void update(LaneDetector.Line l, long t, float yRef) {
             if (l == null) return;
-            if (t - seen > 800 || Math.abs((a + b * yRef) - l.x(yRef)) > 0.18f) {
+            if (t - seen > 1500 || Math.abs((a + b * yRef) - l.x(yRef)) > 0.18f) {
                 a = l.a; b = l.b; support = l.support; yellow = l.yellowFraction; since = t;
             } else {
                 float k = 0.3f;
@@ -20,14 +20,17 @@ public final class LaneState {
             }
             seen = t;
         }
-        boolean live(long t) { return t - seen < 700; }
+        boolean live(long t) { return t - seen < 1400; }
         boolean stable(long t) { return live(t) && t - since > 1500; }
         boolean isYellow() { return yellow > 0.45f; }
         boolean solid() { return support > 0.72f; }
     }
 
     private final Side l = new Side(), r = new Side();
-    private long driftSince = -1, typeSince = 0;
+    private long driftSince = -1, typeSince = 0, widthAt = -100000;
+    private float widthA, widthB;
+    /** true when that side is worked out from the usual lane width, not seen */
+    public boolean estimatedLeft, estimatedRight;
     private LaneType candidate = LaneType.UNKNOWN;
 
     public boolean hasLeft, hasRight, leftSolid, rightSolid, leftYellow, rightYellow;
@@ -38,11 +41,27 @@ public final class LaneState {
     public LaneType type = LaneType.UNKNOWN;
     public boolean departing;
 
+    /** A frozen copy of the public values for another thread. */
+    public LaneState snapshot() {
+        LaneState s = new LaneState();
+        s.hasLeft = hasLeft; s.hasRight = hasRight; s.leftSolid = leftSolid; s.rightSolid = rightSolid;
+        s.leftYellow = leftYellow; s.rightYellow = rightYellow; s.la = la; s.lb = lb; s.ra = ra; s.rb = rb;
+        s.offset = offset; s.position = position; s.type = type; s.departing = departing;
+        s.estimatedLeft = estimatedLeft; s.estimatedRight = estimatedRight;
+        return s;
+    }
+
     public void update(LaneDetector.Result res, long t, float center, float yBottom) {
         l.update(res.left, t, yBottom);
         r.update(res.right, t, yBottom);
         hasLeft = l.live(t); hasRight = r.live(t);
         la = l.a; lb = l.b; ra = r.a; rb = r.b;
+        estimatedLeft = estimatedRight = false;
+        if (l.stable(t) && r.stable(t)) { widthA = ra - la; widthB = rb - lb; widthAt = t; }
+        else if (t - widthAt < 8000) {
+            if (hasLeft && !hasRight) { ra = la + widthA; rb = lb + widthB; hasRight = estimatedRight = true; }
+            else if (hasRight && !hasLeft) { la = ra - widthA; lb = rb - widthB; hasLeft = estimatedLeft = true; }
+        }
         leftSolid = l.solid(); rightSolid = r.solid(); leftYellow = l.isYellow(); rightYellow = r.isYellow();
 
         if (hasLeft && hasRight) {

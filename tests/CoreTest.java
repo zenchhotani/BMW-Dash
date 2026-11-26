@@ -22,6 +22,17 @@ public class CoreTest {
         for (int r = row; r < row + 6; r++) for (int c = 7; c < 13; c++) a[r*20+c] = color;
         return a;
     }
+    static void faint(float xb) {
+        float hz = .5f, yb = .9f;
+        for (int r = (int)(H*hz)+2; r < H; r++) {
+            float yn = (float)r/H, x = .5f + (xb-.5f)*(yn-hz)/(yb-hz);
+            int half = Math.max(1, (int)((yn-hz)*7));
+            for (int c = (int)(x*W)-half; c <= (int)(x*W)+half; c++) if (c >= 0 && c < W) g[r*W+c] += 20;
+        }
+    }
+    static Track car(int id, float distance, float lateral, float rate) {
+        Track c = new Track(); c.id = id; c.label = "car"; c.hits = 20; c.distance = distance; c.lateral = lateral; c.rangeRate = rate; return c;
+    }
     public static void main(String[] a) {
         LaneDetector d = new LaneDetector();
         for (float shift : new float[]{0f, -.12f, .12f}) {
@@ -107,6 +118,36 @@ public class CoreTest {
         List<float[]> lf = ArPath.build(leftward, 0, 0, 120, 5);
         check("ar left turn", lf.get(lf.size()-1)[0] < -30);
         check("ar snap", Math.abs(ArPath.viewHeading(corner, 0, 4) - ArPath.bearingAt(corner, 0)) < .01 && ArPath.viewHeading(corner, 0, 40) == 40);
+        // faded paint
+        LaneDetector fd = new LaneDetector();
+        road(); faint(.18f); faint(.82f);
+        LaneDetector.Result fr = fd.detect(g, y, W, H, .5f, .9f, .5f);
+        check("faded lines", fr.left != null && fr.right != null && Math.abs(fr.left.x(.9f) - .18f) < .04);
+        LaneState ls = new LaneState();
+        LaneDetector gd = new LaneDetector();
+        for (int ms = 0; ms <= 3000; ms += 100) { road(); line(.18f, .5f, false, false); line(.82f, .5f, false, false); ls.update(gd.detect(g, y, W, H, .5f, .9f, .5f), ms, .5f, .9f); }
+        for (int ms = 3100; ms <= 6000; ms += 100) { road(); line(.18f, .5f, false, false); ls.update(gd.detect(g, y, W, H, .5f, .9f, .5f), ms, .5f, .9f); }
+        check("missing side estimated", ls.hasRight && ls.estimatedRight && Math.abs(ls.ra + ls.rb * .9f - .82f) < .05);
+
+        // neighbour drifting into our lane
+        Predictor pr = new Predictor(); Safety.Event pe = null; String intent = "";
+        for (int ms = 0; ms <= 2500; ms += 100) {
+            Track c = car(1, 25, 3.5f - ms / 1000f, 0);
+            Safety.Event x = pr.update(ms, 20, List.of(c)); if (x != null) pe = x; if (!c.intent.isEmpty()) intent = c.intent;
+        }
+        check("cut-in predicted " + intent, pe != null && pe.code.equals("p-cut"));
+        pr = new Predictor(); pe = null;
+        for (int ms = 0; ms <= 4000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(2, 25, 3.5f, 0))); if (x != null) pe = x; }
+        check("steady neighbour quiet", pe == null);
+        pr = new Predictor(); pe = null;
+        for (int ms = 0; ms <= 3000; ms += 100) { Track c = car(3, 30, 0, -3f * ms / 1000f); c.lead = true; Safety.Event x = pr.update(ms, 20, List.of(c)); if (x != null) pe = x; }
+        check("slowing predicted", pe != null && pe.code.equals("p-slow"));
+        pr = new Predictor(); pe = null;
+        for (int ms = 0; ms <= 9000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(4, 30, (float) Math.sin(ms / 600.0), 0))); if (x != null) pe = x; }
+        check("weaving", pe != null && pe.code.equals("p-weave"));
+        pr = new Predictor(); pe = null;
+        for (int ms = 0; ms <= 3000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(5, 25, 3.5f - ms / 1000f, 0), car(6, 25, -2f - ms / 1000f, 0))); if (x != null) pe = x; }
+        check("own turn ignored", pe == null);
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

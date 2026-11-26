@@ -16,6 +16,8 @@ public final class Track {
     public boolean lead;
     /** lit colour for traffic lights, see SignalColor */
     public int signal;
+    /** what this driver seems to be doing, empty when nothing notable */
+    public String intent = "";
     /** metres right of our axis, NaN when unknown */
     public float lateral = Float.NaN;
     final ArrayDeque<float[]> history = new ArrayDeque<>();

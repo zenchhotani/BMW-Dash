@@ -103,6 +103,7 @@ final class OverlayView extends View {
             }
         }
         p.setStyle(Paint.Style.STROKE); p.setStrokeCap(Paint.Cap.ROUND);
+        android.graphics.DashPathEffect guessed = new android.graphics.DashPathEffect(new float[]{14 * d, 14 * d}, 0);
         for (int side = 0; side < 2; side++) {
             if (side == 0 ? !lane.hasLeft : !lane.hasRight) continue;
             float a = side == 0 ? lane.la : lane.ra, b = side == 0 ? lane.lb : lane.rb;
@@ -112,7 +113,10 @@ final class OverlayView extends View {
             p.setColor((col & 0x00FFFFFF) | 0x50000000); p.setStrokeWidth(12 * d);
             c.drawLine(x0, oy + y0 * h, x1, oy + y1 * h, p);
             p.setColor(col); p.setStrokeWidth(3.5f * d);
+            // dashed on screen means worked out from lane width, not seen
+            if (side == 0 ? lane.estimatedLeft : lane.estimatedRight) p.setPathEffect(guessed);
             c.drawLine(x0, oy + y0 * h, x1, oy + y1 * h, p);
+            p.setPathEffect(null);
         }
     }
 
@@ -138,7 +142,7 @@ final class OverlayView extends View {
             p.setStyle(Paint.Style.FILL); p.setColor((color & 0x00FFFFFF) | 0x22000000);
             c.drawRoundRect(r, 6 * d, 6 * d, p);
         }
-        if (r.width() < 22 * d && !t.lead && t.signal == 0) return;
+        if (r.width() < 22 * d && !t.lead && t.signal == 0 && t.intent.isEmpty()) return;
         String s = t.label.toUpperCase(java.util.Locale.US);
         if (t.signal != 0) s = t.signal == 1 ? "RED LIGHT" : t.signal == 2 ? "YELLOW LIGHT" : "GREEN LIGHT";
         if (vehicle && !Float.isNaN(t.distance)) {
@@ -148,6 +152,7 @@ final class OverlayView extends View {
                 if (ego > 3 && other > -2) s += "  •  " + Ui.speed(Math.max(0, other), mph) + " " + Ui.unit(mph);
             }
         }
+        if (!t.intent.isEmpty()) s = t.intent + "  \u2022  " + s;
         if (t.lead && !leadName.isEmpty()) s = leadName + "  \u2022  " + s;
         p.setTextSize((t.lead ? 15 : 11) * d); p.setTypeface(Typeface.DEFAULT_BOLD); p.setStyle(Paint.Style.FILL);
         float tw = p.measureText(s), pad = 6 * d, th = p.getTextSize() + pad;

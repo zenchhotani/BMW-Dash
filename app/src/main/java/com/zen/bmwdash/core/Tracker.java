@@ -59,7 +59,16 @@ public final class Tracker {
         tr.left += k * (d.left - tr.left); tr.top += k * (d.top - tr.top);
         tr.right += k * (d.right - tr.right); tr.bottom += k * (d.bottom - tr.bottom);
         tr.score = d.score; tr.label = d.label; tr.lastSeen = t; tr.hits++;
-        if (!tr.isVehicle()) {
+        if (tr.isVehicle()) {
+            float m = range(tr);
+            if (Float.isNaN(m)) return;
+            tr.distance = Float.isNaN(tr.distance) ? m : tr.distance + 0.35f * (m - tr.distance);
+            tr.lateral = (tr.cx() - center) * tr.distance / focal;
+            tr.history.addLast(new float[]{(t - tr.firstSeen) / 1000f, m});
+            float now = (t - tr.firstSeen) / 1000f;
+            while (!tr.history.isEmpty() && now - tr.history.peekFirst()[0] > 2f) tr.history.removeFirst();
+            tr.rangeRate = slope(tr.history);
+        } else {
             // people, animals and objects: flat-road range from where they touch the ground
             float dy = (tr.bottom - horizon) * aspect;
             if (dy > 0.012f && tr.bottom < 0.9f) {
@@ -67,15 +76,7 @@ public final class Tracker {
                 tr.distance = Float.isNaN(tr.distance) ? g : tr.distance + 0.4f * (g - tr.distance);
                 tr.lateral = (tr.cx() - center) * tr.distance / focal;
             } else { tr.distance = Float.NaN; tr.lateral = Float.NaN; }
-            return;
         }
-        float m = range(tr);
-        if (Float.isNaN(m)) return;
-        tr.distance = Float.isNaN(tr.distance) ? m : tr.distance + 0.35f * (m - tr.distance);
-        tr.history.addLast(new float[]{(t - tr.firstSeen) / 1000f, m});
-        float now = (t - tr.firstSeen) / 1000f;
-        while (!tr.history.isEmpty() && now - tr.history.peekFirst()[0] > 2f) tr.history.removeFirst();
-        tr.rangeRate = slope(tr.history);
     }
 
     /** Range from vehicle width, blended with the flat-road estimate when the two agree. */

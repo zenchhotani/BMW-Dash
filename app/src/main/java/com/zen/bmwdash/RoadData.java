@@ -33,6 +33,8 @@ final class RoadData {
     static final class Weather { String summary = "", hazard; double temp = Double.NaN, gap = 2; }
     static final class Incident { double lat, lon; String text, title; int severity, category; }
     static final class Camera { double lat, lon; }
+    /** slow traffic found further along; speeds in m/s */
+    static final class Jam { double lat, lon, speed, free; }
     static final class Place { String name = "", address = ""; double lat, lon, meters = Double.NaN; }
     static final class Step { double along; String text; int direction; }
     static final class Route {
@@ -64,13 +66,17 @@ final class RoadData {
     Weather weather;
     List<Incident> incidents = new ArrayList<>();
     List<Camera> cameras = new ArrayList<>();
-    double aheadFlow = Double.NaN; // m/s, about 800 m further on
+    double aheadFlow = Double.NaN; // m/s, slow traffic within about 800 m
+    List<Jam> jams = new ArrayList<>();
+    /** active route, or null; traffic is sampled along it */
+    double[][] path;
+    private long aheadTime = -1000000;
     String trafficStatus = "";
     Runnable onChange = () -> {};
 
     RoadData(Prefs p) { prefs = p; }
 
-    void refreshNow() { flowTime = incidentTime = tomTry = nomTry = -1000000; trafficStatus = roadProblem = ""; }
+    void refreshNow() { flowTime = incidentTime = tomTry = nomTry = aheadTime = -1000000; trafficStatus = roadProblem = ""; }
 
     /** Call on the main thread with each location fix; throttles itself. */
     void update(double lat, double lon, double heading, boolean headingValid) {
@@ -105,14 +111,14 @@ final class RoadData {
             if (now - flowTime > 45_000 || (moved > 400 && now - flowTime > 15_000)) {
                 flowTime = now; flowLat = lat; flowLon = lon;
                 livePool.execute(() -> fetchFlow(lat, lon, key));
-                if (headingValid) {
-                    double aLat = lat + 800 * Math.cos(Math.toRadians(heading)) / 111_320;
-                    double aLon = lon + 800 * Math.sin(Math.toRadians(heading)) / (111_320 * Math.max(0.2, Math.cos(Math.toRadians(lat))));
-                    livePool.execute(() -> fetchAhead(aLat, aLon, key));
-                } else aheadFlow = Double.NaN;
+            }
+            if ((headingValid || path != null) && now - aheadTime > 75_000) {
+                aheadTime = now;
+                double[][] along = path;
+                livePool.execute(() -> fetchAhead(lat, lon, heading, headingValid, along, key));
             }
             if (now - incidentTime > 120_000) { incidentTime = now; livePool.execute(() -> fetchIncidents(lat, lon, key)); }
-        } else { flow = freeFlow = aheadFlow = Double.NaN; incidents = new ArrayList<>(); }
+        } else { flow = freeFlow = aheadFlow = Double.NaN; incidents = new ArrayList<>(); jams = new ArrayList<>(); }
         if (now - weatherTime > 600_000) { weatherTime = now; livePool.execute(() -> fetchWeather(lat, lon)); }
     }
 
@@ -246,16 +252,50 @@ final class RoadData {
         }
     }
 
-    private void fetchAhead(double lat, double lon, String key) {
-        double result = Double.NaN;
-        try {
-            String u = String.format(Locale.US, "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/12/json?point=%.6f,%.6f&unit=KMPH&key=%s", lat, lon, enc(key));
-            JSONObject d = new JSONObject(http(u, null)).getJSONObject("flowSegmentData");
-            double c = d.getDouble("currentSpeed") / 3.6, f = d.getDouble("freeFlowSpeed") / 3.6;
-            if (c < f * 0.65 && d.optDouble("confidence", 1) > 0.5) result = c;
-        } catch (Exception e) { Log.w(TAG, "ahead " + e.getMessage()); }
-        double value = result;
-        main.post(() -> { aheadFlow = value; onChange.run(); });
+    /** Samples live speed at several points further along the route, or straight ahead without one. */
+    private void fetchAhead(double lat, double lon, double heading, boolean valid, double[][] route, String key) {
+        List<Jam> found = new ArrayList<>();
+        double near = Double.NaN;
+        double start = route == null ? 0 : Geo.project(route, lat, lon)[1];
+        for (double d : new double[]{600, 1500, 3000, 5000}) {
+            try {
+                double aLat, aLon, course;
+                if (route != null) {
+                    double[][] bit = Geo.slice(route, start + d, start + d + 40);
+                    if (bit.length < 2) break;
+                    aLat = bit[0][0]; aLon = bit[0][1];
+                    course = Geo.bearing(aLat, aLon, bit[bit.length - 1][0], bit[bit.length - 1][1]);
+                } else {
+                    // a straight guess is only good for a short way
+                    if (!valid || d > 3000) break;
+                    aLat = lat + d * Math.cos(Math.toRadians(heading)) / 111_320;
+                    aLon = lon + d * Math.sin(Math.toRadians(heading)) / (111_320 * Math.max(0.2, Math.cos(Math.toRadians(lat))));
+                    course = heading;
+                }
+                String u = String.format(Locale.US, "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/12/json?point=%.6f,%.6f&unit=KMPH&key=%s", aLat, aLon, enc(key));
+                JSONObject o = new JSONObject(http(u, null)).getJSONObject("flowSegmentData");
+                double c = o.getDouble("currentSpeed") / 3.6, f = o.getDouble("freeFlowSpeed") / 3.6;
+                if (c >= f * 0.65 || o.optDouble("confidence", 1) <= 0.5) continue;
+                // ignore side streets and the opposite carriageway
+                if (!sameWay(o.getJSONObject("coordinates").getJSONArray("coordinate"), aLat, aLon, course)) continue;
+                Jam j = new Jam(); j.lat = aLat; j.lon = aLon; j.speed = c; j.free = f; found.add(j);
+                if (d <= 600) near = c;
+            } catch (Exception e) { Log.w(TAG, "ahead " + e.getMessage()); }
+        }
+        double value = near;
+        main.post(() -> { aheadFlow = value; jams = found; onChange.run(); });
+    }
+
+    private static boolean sameWay(JSONArray c, double lat, double lon, double course) {
+        for (int i = 0; i + 1 < c.length(); i++) {
+            JSONObject a = c.optJSONObject(i), b = c.optJSONObject(i + 1);
+            if (a == null || b == null) continue;
+            double la = a.optDouble("latitude"), lo = a.optDouble("longitude"), lb = b.optDouble("latitude"), ob = b.optDouble("longitude");
+            if (Geo.toSegment(lat, lon, la, lo, lb, ob)[0] > 80) continue;
+            double turn = Math.abs(((Geo.bearing(la, lo, lb, ob) - course + 540) % 360) - 180);
+            if (turn < 50) return true;
+        }
+        return false;
     }
 
     private void fetchIncidents(double lat, double lon, String key) {
