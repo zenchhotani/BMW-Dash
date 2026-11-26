@@ -18,6 +18,7 @@ Download `BMW-Dash.apk` from the latest [release](../../releases/latest), open i
 - Collision, cut-in, pedestrian and object warnings with a full-screen alarm (the app cannot brake the car)
 - Closure, incident, slow-traffic and speed-camera warnings, plus your own police and pothole reports
 - Night view, crash prompt with one-tap 911 or text to a contact, break reminders and a trip safety score
+- Large red / yellow / green indicator for the traffic light the camera is reading, with spoken hints
 - Voice and live destination search, with a focused 3D guidance view
 - 3D route arrows and turn signs drawn on the camera picture; Map button for small, large or hidden map; 3D route on/off button
 

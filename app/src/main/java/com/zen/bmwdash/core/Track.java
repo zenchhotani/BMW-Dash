@@ -14,6 +14,8 @@ public final class Track {
     /** metres/second, positive = gap opening */
     public float rangeRate = Float.NaN;
     public boolean lead;
+    /** lit colour for traffic lights, see SignalColor */
+    public int signal;
     /** metres right of our axis, NaN when unknown */
     public float lateral = Float.NaN;
     final ArrayDeque<float[]> history = new ArrayDeque<>();

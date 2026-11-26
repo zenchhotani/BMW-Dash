@@ -86,6 +86,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private SearchPanel searchPanel;
     private long showButtonsUntil;
     private TextView arButton;
+    private SignalView signalView;
     private boolean navShown;
     private LinearLayout routeRow;
 
@@ -228,6 +229,11 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         LinearLayout.LayoutParams cc = new LinearLayout.LayoutParams(-2, -2);
         cc.topMargin = dp(6);
         top.addView(carCard, cc);
+        signalView = new SignalView(this);
+        LinearLayout.LayoutParams sv = new LinearLayout.LayoutParams(dp(210), dp(48));
+        sv.gravity = Gravity.CENTER_HORIZONTAL;
+        sv.topMargin = dp(6);
+        top.addView(signalView, sv);
         // always reachable while a route is active, even when the other buttons are tucked away
         arButton = Ui.button(this, "", Ui.CYAN, () -> {
             prefs.edit().putBoolean("arroute", !prefs.arRoute()).apply();
@@ -444,6 +450,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     @Override public void onScene(int signal, float bright) {
         light = signal;
+        signalView.show(signal);
         brightness = bright;
         // hysteresis so auto night view does not flicker under street lamps
         if (bright < 55) autoDark = true; else if (bright > 80) autoDark = false;
@@ -557,6 +564,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             }
         } else alarm.hide();
         carCard(seeing, fresh);
+        if (!seeing) signalView.show(0);
     }
 
     private void carCard(boolean seeing, boolean fresh) {

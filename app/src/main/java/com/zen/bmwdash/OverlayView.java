@@ -120,7 +120,8 @@ final class OverlayView extends View {
         boolean vehicle = t.isVehicle();
         int color = Ui.BLUE;
         if (t.label.equals("person") || t.label.equals("bicycle")) color = Ui.AMBER;
-        else if (t.label.equals("traffic light") || t.label.equals("stop sign")) color = Ui.VIOLET;
+        else if (t.label.equals("traffic light") || t.label.equals("stop sign"))
+            color = t.signal == 1 ? Ui.RED : t.signal == 2 ? Ui.AMBER : t.signal == 3 ? Ui.GREEN : Ui.VIOLET;
         else if (t.lead) {
             double gap = ego > 3 && !Float.isNaN(t.distance) ? t.distance / ego : 99;
             color = gap < 1.2 ? Ui.RED : gap < 2 ? Ui.AMBER : Ui.GREEN;
@@ -137,8 +138,9 @@ final class OverlayView extends View {
             p.setStyle(Paint.Style.FILL); p.setColor((color & 0x00FFFFFF) | 0x22000000);
             c.drawRoundRect(r, 6 * d, 6 * d, p);
         }
-        if (r.width() < 22 * d && !t.lead) return;
+        if (r.width() < 22 * d && !t.lead && t.signal == 0) return;
         String s = t.label.toUpperCase(java.util.Locale.US);
+        if (t.signal != 0) s = t.signal == 1 ? "RED LIGHT" : t.signal == 2 ? "YELLOW LIGHT" : "GREEN LIGHT";
         if (vehicle && !Float.isNaN(t.distance)) {
             s = Ui.range(t.distance, mph);
             if (!Float.isNaN(t.rangeRate)) {

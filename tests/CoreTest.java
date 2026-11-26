@@ -17,6 +17,11 @@ public class CoreTest {
             for (int c = (int)(x*W)-half; c <= (int)(x*W)+half; c++) if (c >= 0 && c < W) { g[r*W+c] = yel ? 150 : 205; y[r*W+c] = yel; }
         }
     }
+    static int[] lamp(int color, int row) {
+        int[] a = new int[20*50]; java.util.Arrays.fill(a, 0xFF181818);
+        for (int r = row; r < row + 6; r++) for (int c = 7; c < 13; c++) a[r*20+c] = color;
+        return a;
+    }
     public static void main(String[] a) {
         LaneDetector d = new LaneDetector();
         for (float shift : new float[]{0f, -.12f, .12f}) {
@@ -74,8 +79,19 @@ public class CoreTest {
         Track person = new Track(); person.label = "person"; person.hits = 5; person.distance = 12; person.lateral = .3f;
         Safety.Input pi = new Safety.Input(); pi.t = 100; pi.speed = 12; pi.seeing = true; pi.tracks = List.of(person);
         ev = new Safety().update(pi); check("person in path", ev != null && ev.level == Advisor.DANGER);
-        int[] red = new int[600]; java.util.Arrays.fill(red, 0xFF202020); for (int i = 0; i < 40; i++) red[i] = 0xFFFF2010;
-        check("red light", SignalColor.classify(red) == SignalColor.RED && SignalColor.classify(new int[600]) == SignalColor.NONE);
+        int R = 0xFFFF2010, G = 0xFF20F0C0, Y = 0xFFFFC020;
+        check("red lamp", SignalColor.classify(lamp(R, 6), 20, 50) == SignalColor.RED);
+        check("green lamp", SignalColor.classify(lamp(G, 40), 20, 50) == SignalColor.GREEN);
+        check("yellow lamp", SignalColor.classify(lamp(Y, 23), 20, 50) == SignalColor.YELLOW);
+        check("dark housing", SignalColor.classify(lamp(0xFF202020, 6), 20, 50) == SignalColor.NONE);
+        check("grey sky", SignalColor.classify(lamp(0xFFC8C8D0, 6), 20, 50) == SignalColor.NONE);
+        SignalState st = new SignalState();
+        check("one read ignored", st.update(SignalColor.RED, 0) == SignalColor.NONE);
+        check("two reads show", st.update(SignalColor.RED, 300) == SignalColor.RED);
+        check("flicker held", st.update(SignalColor.NONE, 900) == SignalColor.RED);
+        st.update(SignalColor.GREEN, 1000);
+        check("changes to green", st.update(SignalColor.GREEN, 1300) == SignalColor.GREEN);
+        check("expires", st.update(SignalColor.NONE, 3200) == SignalColor.NONE);
         double[][] cut = Geo.slice(new double[][]{{40,-75},{40.01,-75}}, 100, 200);
         check("slice", cut.length == 2 && Math.abs(Geo.distance(cut[0][0],cut[0][1],cut[1][0],cut[1][1]) - 100) < 1);
         check("tomtom limit", Math.abs(Geo.parseMaxSpeedKmh("35.00mph") - 56.33) < .1);

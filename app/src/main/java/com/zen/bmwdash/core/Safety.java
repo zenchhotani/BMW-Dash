@@ -124,6 +124,8 @@ public final class Safety {
             if (light == SignalColor.RED) {
                 if (v < 0.7) redWhileStopped = 1;
                 else if (v > 6 && fire("red", t, 20000)) hold(new Event("red", Advisor.WARN, "Red light ahead", "Red light ahead"), t, 3000);
+            } else if (light == SignalColor.YELLOW) {
+                if (v > 6 && fire("yellow", t, 15000)) hold(new Event("yellow", Advisor.WARN, "Yellow light ahead", "Yellow light"), t, 3000);
             } else if (light == SignalColor.GREEN && redWhileStopped == 1 && v < 0.7) {
                 redWhileStopped = 0;
                 if (fire("green", t, 20000)) hold(new Event("green", Advisor.GOOD, "Light is green. Check before you go.", "Light is green"), t, 3000);

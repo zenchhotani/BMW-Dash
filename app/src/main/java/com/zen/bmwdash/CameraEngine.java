@@ -51,6 +51,7 @@ import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.SignalColor;
+import com.zen.bmwdash.core.SignalState;
 import com.zen.bmwdash.core.Track;
 import com.zen.bmwdash.core.Tracker;
 
@@ -107,6 +108,8 @@ final class CameraEngine {
     static { for (int i = 0; i < 256; i++) LUT[i] = (int) Math.round(255 * Math.pow(i / 255.0, 0.55)); }
     private boolean wantRecording, lockCurrent, closed, paused;
     private long frameCount, fpsStart;
+    private final SignalState signalState = new SignalState();
+    private final android.util.SparseIntArray lampColors = new android.util.SparseIntArray();
     private int fps, fpsFrames;
 
     CameraEngine(Context c, Prefs p, Listener l) { ctx = c; prefs = p; listener = l; }
@@ -221,13 +224,15 @@ final class CameraEngine {
             float horizon = prefs.horizon(), center = prefs.center(), hood = prefs.hood();
 
             Bitmap seen = enhance ? brighten(frame) : frame;
-            // every other frame zooms into the road ahead so distant cars are found too
+            // take turns: whole frame, zoom on the road ahead, zoom higher up for traffic lights
             List<Detection> dets = new ArrayList<>();
-            if ((frameCount++ & 1) == 0) detect(seen, 0, 0, w, h, w, h, dets);
+            int pass = (int) (frameCount++ % 3);
+            if (pass == 0) detect(seen, 0, 0, w, h, w, h, dets);
             else {
                 int cw = w / 2, ch = h / 2;
                 int cx = clamp(Math.round(center * w) - cw / 2, 0, w - cw);
-                int cy = clamp(Math.round(horizon * h) - ch * 2 / 5, 0, h - ch);
+                int top = Math.round(horizon * h) - (pass == 1 ? ch * 2 / 5 : ch * 9 / 10);
+                int cy = clamp(top, 0, h - ch);
                 Bitmap crop = Bitmap.createBitmap(seen, cx, cy, cw, ch);
                 detect(crop, cx, cy, cw, ch, w, h, dets);
                 crop.recycle();
@@ -257,21 +262,30 @@ final class CameraEngine {
 
             brightness += 0.05f * (sum / (float) px.length - brightness);
 
-            // the biggest traffic light near the middle of the road
-            Track signal = null, ahead = null;
+            // read every light just seen; larger and more central ones count for more
+            Track ahead = null;
+            float[] votes = new float[4];
             for (Track k : tracks) {
                 if (k.lead) ahead = k;
-                if (k.label.equals("traffic light") && k.cx() > 0.25f && k.cx() < 0.75f && (k.right - k.left) * w >= 9
-                        && (signal == null || k.right - k.left > signal.right - signal.left)) signal = k;
+                if (!k.label.equals("traffic light")) continue;
+                if (k.lastSeen == t && (k.right - k.left) * w >= 7) {
+                    int x = clamp((int) (k.left * w), 0, w - 2), y = clamp((int) (k.top * h), 0, h - 2);
+                    int bw = clamp((int) ((k.right - k.left) * w), 1, w - x), bh = clamp((int) ((k.bottom - k.top) * h), 1, h - y);
+                    int[] lp = new int[bw * bh];
+                    // the untouched frame: night brightening would wash the lamp colour out
+                    frame.getPixels(lp, 0, bw, x, y, bw, bh);
+                    int colour = SignalColor.classify(lp, bw, bh);
+                    lampColors.put(k.id, colour);
+                    float offset = Math.abs(k.cx() - center);
+                    if (offset < 0.35f && k.top < horizon) votes[colour] += bw * bh * (1f - 2f * offset);
+                }
+                k.signal = lampColors.get(k.id);
             }
-            int light = SignalColor.NONE;
-            if (signal != null) {
-                int x = clamp((int) (signal.left * w), 0, w - 2), y = clamp((int) (signal.top * h), 0, h - 2);
-                int bw = clamp((int) ((signal.right - signal.left) * w), 1, w - x), bh = clamp((int) ((signal.bottom - signal.top) * h), 1, h - y);
-                int[] lp = new int[bw * bh];
-                frame.getPixels(lp, 0, bw, x, y, bw, bh);
-                light = SignalColor.classify(lp);
-            }
+            if (lampColors.size() > 200) lampColors.clear();
+            int read = SignalColor.NONE;
+            for (int i = SignalColor.RED; i <= SignalColor.GREEN; i++)
+                if (votes[i] > 0 && (read == SignalColor.NONE || votes[i] > votes[read])) read = i;
+            int light = signalState.update(read, t);
             if (ahead != null && ahead.hits >= 5) {
                 float bw = ahead.right - ahead.left, bh = ahead.bottom - ahead.top;
                 int x = clamp((int) ((ahead.left - bw * 0.08f) * w), 0, w - 2), y = clamp((int) ((ahead.top - bh * 0.08f) * h), 0, h - 2);
