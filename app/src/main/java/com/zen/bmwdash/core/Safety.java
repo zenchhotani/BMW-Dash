@@ -64,12 +64,9 @@ public final class Safety {
             speedT = t; speedRef = v;
         }
 
-        // collision: needs a steady track and a condition that persists
-        // only for something really in our path; anything not seen moving must be dead ahead and well established
+        // collision: only for a vehicle in front of our own path, never a parked one, and only once it is well established
         boolean moves = ranged && lead.motion == Track.MOVING;
-        boolean inPath = ranged && lead.motion != Track.PARKED
-                && (Float.isNaN(lead.lateral) || Math.abs(lead.lateral) < (moves ? 1.5f : 0.9f))
-                && (moves || (!in.turning && lead.hits >= 8));
+        boolean inPath = ranged && lead.inPath && lead.motion != Track.PARKED && (moves || lead.hits >= 6) && (!lead.lamps || lead.hits >= 10);
         if (inPath && v > 4 && lead.hits >= 5 && !Float.isNaN(lead.rangeRate)) {
             double closing = -lead.rangeRate, d = lead.distance;
             double ttc = closing > 1.5 ? d / closing : 99;
@@ -97,7 +94,7 @@ public final class Safety {
         } else leadSpeedRef = Double.NaN;
 
         // cut-in
-        if (ranged && v > 10 && lead.id != prevLeadId && lead.distance < v * 1.2
+        if (ranged && v > 10 && lead.id != prevLeadId && lead.motion == Track.MOVING && lead.hits >= 6 && lead.distance < v * 1.2
                 && (Float.isNaN(prevLeadDist) || lead.distance < prevLeadDist * 0.65) && fire("cutin", t, 15000))
             hold(new Event("cutin", Advisor.WARN, "Vehicle cut in: ease off", "Vehicle cutting in"), t, 3000);
 
@@ -124,7 +121,7 @@ public final class Safety {
         if (in.seeing && in.tracks != null && v > 3) {
             for (Track k : in.tracks) {
                 if (k.isVehicle() || !k.confirmed || Float.isNaN(k.distance) || k.distance > Math.max(18, v * 2.5)) continue;
-                if (Math.abs(k.lateral) > 1.5) continue;
+                if (Float.isNaN(k.pathX) || Math.abs(k.pathX) > 1.6) continue;
                 String what = k.label.equals("person") ? "Person" : k.label.equals("bicycle") ? "Cyclist" : k.isAnimal() ? "Animal" : k.isObstacle() ? "Object" : null;
                 if (what == null || !fire("path" + what, t, 6000)) continue;
                 boolean close = k.distance < Math.max(10, v * 1.4);

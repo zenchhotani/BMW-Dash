@@ -44,6 +44,7 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.components.containers.Category;
 import com.google.mediapipe.tasks.core.BaseOptions;
+import com.google.mediapipe.tasks.core.Delegate;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector;
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
@@ -52,6 +53,7 @@ import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.Pace;
+import com.zen.bmwdash.core.Taillights;
 import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.SignalColor;
 import com.zen.bmwdash.core.SignalPicker;
@@ -100,7 +102,13 @@ final class CameraEngine {
     private final LaneDetector laneDetector = new LaneDetector();
     private final LaneState laneState = new LaneState();
 
-    private ObjectDetector detector;
+    private ObjectDetector detector, cpu, gpu;
+    /** the graphics chip is tried against the processor for the first looks, and the faster one kept */
+    private final long[] spent = new long[2];
+    private final int[] runs = new int[2], hits = new int[2];
+    private volatile String engine = "CPU";
+    private volatile int inferMs;
+    private volatile double fixSpeed = Double.NaN, pathCurve;
     private Preview preview;
     private ImageAnalysis analysis;
     private VideoCapture<Recorder> video;
@@ -140,15 +148,22 @@ final class CameraEngine {
         }, ContextCompat.getMainExecutor(ctx));
     }
 
+    private ObjectDetector make(Delegate where) {
+        ObjectDetector.ObjectDetectorOptions o = ObjectDetector.ObjectDetectorOptions.builder()
+                .setBaseOptions(BaseOptions.builder().setModelAssetPath("detector.tflite").setDelegate(where).build())
+                .setRunningMode(RunningMode.IMAGE).setMaxResults(25).setScoreThreshold(0.33f).build();
+        return ObjectDetector.createFromOptions(ctx, o);
+    }
+
     private void loadDetector() {
         if (detector != null) return;
+        try { gpu = make(Delegate.GPU); } catch (Throwable e) { Log.w(TAG, "graphics chip not available", e); gpu = null; }
         try {
-            ObjectDetector.ObjectDetectorOptions o = ObjectDetector.ObjectDetectorOptions.builder()
-                    .setBaseOptions(BaseOptions.builder().setModelAssetPath("detector.tflite").build())
-                    .setRunningMode(RunningMode.IMAGE).setMaxResults(25).setScoreThreshold(0.33f).build();
-            detector = ObjectDetector.createFromOptions(ctx, o);
+            cpu = make(Delegate.CPU);
+            detector = cpu;
         } catch (Exception e) {
             Log.e(TAG, "detector", e);
+            if (gpu != null) { detector = gpu; engine = "GPU"; gpu = null; return; }
             main.post(() -> listener.onError("Car detection could not start: " + e.getMessage()));
         }
     }
@@ -158,7 +173,7 @@ final class CameraEngine {
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY).build();
         ResolutionSelector small = new ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
-                .setResolutionStrategy(new ResolutionStrategy(new Size(1920, 1080),
+                .setResolutionStrategy(new ResolutionStrategy(new Size(1280, 720),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build();
         preview = new Preview.Builder().setResolutionSelector(wide).setTargetRotation(rotation).build();
         preview.setSurfaceProvider(view.getSurfaceProvider());
@@ -201,6 +216,12 @@ final class CameraEngine {
 
     /** our speed and the phone's thermal level decide how often to work */
     void pace(double speed, int thermal) { egoSpeed = speed; heat = thermal; }
+
+    /** GPS speed (NaN when stale) and the curve we are driving, for judging what is in our path */
+    void motion(double speed, double curvature) { fixSpeed = speed; pathCurve = curvature; }
+
+    /** which chip runs detection and how long one look takes */
+    String engine() { return engine + " " + inferMs + " ms"; }
 
     /** focal length over upright frame width, as used for distances */
     float focal() { return tracker.focal; }
@@ -266,6 +287,7 @@ final class CameraEngine {
             tracker.horizon = horizon; tracker.center = center; tracker.cameraHeight = prefs.cameraHeight();
             tracker.aspect = h / (float) w;
             tracker.focal = focalOverLong * Math.max(w, h) / w;
+            tracker.ego = fixSpeed; tracker.curvature = pathCurve;
 
             int lw = w >= h ? 480 : 270, lh = Math.max(1, lw * h / w);
             Bitmap tiny = Bitmap.createScaledBitmap(frame, lw, lh, true);
@@ -291,13 +313,21 @@ final class CameraEngine {
                         || RoadUserFilter.glare(px, lw, lh, d))) it.remove();
             }
             tracker.poor = dim;
+            // at night a car ahead is often only two red lamps: add those the model missed
+            if (brightness < 70) {
+                for (Detection lamp : Taillights.find(px, lw, lh, horizon, hood, h / (float) w)) {
+                    boolean known = false;
+                    for (Detection d : dets) if (Tracker.iou(d.left, d.top, d.right, d.bottom, lamp.left, lamp.top, lamp.right, lamp.bottom) > 0.2f) known = true;
+                    if (!known) dets.add(lamp);
+                }
+            }
 
             List<float[]> blocked = new ArrayList<>();
             for (Track k : recent)
                 if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
             laneDetector.ignore = blocked;
             LaneDetector.Result res = laneDetector.detect(gray, yellow, lw, lh, horizon, hood, center);
-            laneState.horizon = horizon;
+            laneState.horizon = horizon; laneState.aspect = h / (float) w; laneState.cameraHeight = prefs.cameraHeight();
             laneState.update(res, t, center, hood);
             List<Track> tracks = tracker.update(dets, t, laneState);
             recent = tracks;
@@ -384,7 +414,35 @@ final class CameraEngine {
 
     private void detect(Bitmap b, int ox, int oy, int cw, int ch, int w, int h, List<Detection> out) {
         MPImage img = new BitmapImageBuilder(b).build();
-        ObjectDetectorResult result = detector.detect(img);
+        // trial: the first 40 looks alternate between graphics chip and processor
+        int trial = runs[0] + runs[1];
+        boolean onGpu = gpu != null && trial < 40 && trial % 2 == 0;
+        ObjectDetector use = onGpu ? gpu : detector;
+        long t0 = SystemClock.elapsedRealtime();
+        ObjectDetectorResult result;
+        try { result = use.detect(img); }
+        catch (RuntimeException e) {
+            if (!onGpu) throw e;
+            Log.w(TAG, "graphics chip failed, staying on the processor", e);
+            try { gpu.close(); } catch (Exception ignored) { }
+            gpu = null;
+            result = detector.detect(img);
+            onGpu = false;
+        }
+        long ms = SystemClock.elapsedRealtime() - t0;
+        inferMs = (int) (inferMs == 0 ? ms : (inferMs * 3 + ms) / 4);
+        if (gpu != null && trial < 40) {
+            int k = onGpu ? 1 : 0;
+            // the first look on each warms up and is not counted
+            if (runs[k] > 0) spent[k] += ms;
+            runs[k]++; hits[k] += result.detections().size();
+            if (runs[0] + runs[1] == 40) {
+                // the chip must be clearly faster and find as much
+                boolean better = spent[1] * 10 < spent[0] * 8 && hits[1] * 10 >= hits[0] * 8;
+                if (better) { detector = gpu; engine = "GPU"; try { cpu.close(); } catch (Exception ignored) { } cpu = null; }
+                else { try { gpu.close(); } catch (Exception ignored) { } gpu = null; }
+            }
+        }
         for (com.google.mediapipe.tasks.components.containers.Detection d : result.detections()) {
             if (d.categories().isEmpty()) continue;
             Category c = d.categories().get(0);
@@ -487,7 +545,12 @@ final class CameraEngine {
     void close() {
         closed = true; wantRecording = false; stopSegment();
         if (analysis != null) analysis.clearAnalyzer();
-        worker.execute(() -> { if (detector != null) detector.close(); detector = null; });
+        worker.execute(() -> {
+            if (gpu != null && gpu != detector) gpu.close();
+            if (cpu != null && cpu != detector) cpu.close();
+            if (detector != null) detector.close();
+            detector = gpu = cpu = null;
+        });
         worker.shutdown();
     }
 }

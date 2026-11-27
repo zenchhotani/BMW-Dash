@@ -44,6 +44,8 @@ public final class LaneState {
     public boolean departing;
     /** calibrated horizon row, 0..1, when known */
     public float horizon = Float.NaN;
+    /** frame height / width and camera height in metres, to turn picture widths into metres */
+    public float aspect = 9f / 16f, cameraHeight = 1.25f;
 
     /**
      * The highest row the lane lines may be drawn to: below the point where they would meet,
@@ -77,6 +79,13 @@ public final class LaneState {
         boolean crossed = hasLeft && hasRight
                 && (ra + rb * yBottom - la - lb * yBottom < 0.15f || ra + rb * far - la - lb * far < 0.02f);
         if (crossed) { if (l.support >= r.support) hasRight = false; else hasLeft = false; }
+        // a lane is about 2.4 to 4.8 m wide; a wider pair has caught the next lane's line, so keep the one nearer to us
+        float dyb = Float.isNaN(horizon) ? 0 : (yBottom - horizon) * aspect;
+        if (!crossed && hasLeft && hasRight && dyb > 0.04f) {
+            float xl = la + lb * yBottom, xr = ra + rb * yBottom, metres = (xr - xl) * cameraHeight / dyb;
+            if (metres > 4.8f) { if (center - xl > xr - center) hasLeft = false; else hasRight = false; crossed = true; }
+            else if (metres < 2.3f) { if (l.support >= r.support) hasRight = false; else hasLeft = false; crossed = true; }
+        }
         confident = (l.stable(t) && l.support > .28f) || (r.stable(t) && r.support > .28f);
         if (crossed) { /* nothing to learn or guess from this frame */ }
         else if (l.stable(t) && r.stable(t)) { widthA = ra - la; widthB = rb - lb; widthAt = t; }

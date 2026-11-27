@@ -10,16 +10,13 @@ import java.util.Map;
 
 /**
  * Guesses what drivers ahead are about to do from how their position and speed change:
- * moving into our lane, leaving it, braking, stopped, or weaving. Estimates only.
+ * moving into our lane, leaving it, braking, stopped, Estimates only.
  */
 public final class Predictor {
     private static final class Past {
         /** {seconds, lateral metres, their speed m/s} */
         final ArrayDeque<double[]> samples = new ArrayDeque<>();
-        final ArrayDeque<Long> swings = new ArrayDeque<>();
         long seen, cutSince = -1, leaveSince = -1;
-        double extreme = Double.NaN;
-        int direction;
     }
     private final Map<Integer, Past> past = new HashMap<>();
     private final Map<String, Long> last = new HashMap<>();
@@ -64,24 +61,19 @@ public final class Predictor {
             if (!cutting) p.cutSince = -1; else if (p.cutSince < 0) p.cutSince = t;
             boolean leaving = driving && k.lead && moving && side * lat > 0 && Math.abs(side) > 0.55 && Math.abs(lat + side * 1.5) > 1.9;
             if (!leaving) p.leaveSince = -1; else if (p.leaveSince < 0) p.leaveSince = t;
-            if (driving) weave(p, t, lat - turning * k.distance);
 
             Safety.Event e = null;
             if (p.cutSince >= 0 && t - p.cutSince >= 400) {
                 k.intent = "MOVING INTO YOUR LANE";
                 e = event("p-cut", Advisor.WARN, "Car on your " + (lat < 0 ? "left" : "right") + " may cut in: ease off",
                         "Car may cut in", k.id, t);
-            } else if (k.lead && moving && k.motion == Track.STOPPED && Math.abs(lat) < 0.9 && k.hits >= 8
+            } else if (k.lead && moving && k.motion == Track.STOPPED && k.inPath && k.hits >= 8
                     && k.distance < Math.max(25, speed * 4)) {
                 k.intent = "STOPPED";
                 e = event("p-stop", Advisor.WARN, "Stopped vehicle ahead: slow down", "Stopped vehicle ahead", k.id, t);
             } else if (driving && k.lead && moving && accel < -1.8 && k.distance < speed * 3.5) {
                 k.intent = "SLOWING";
                 e = event("p-slow", Advisor.WARN, "Driver ahead is slowing: get ready to brake", "Car ahead slowing", k.id, t);
-            } else if (driving && p.swings.size() >= 3 && speed > 9) {
-                k.intent = "WEAVING";
-                e = event("p-weave", Advisor.WARN, "Vehicle ahead is weaving: keep your distance",
-                        "Vehicle ahead is weaving", k.id, t);
             } else if (p.leaveSince >= 0 && t - p.leaveSince >= 400) {
                 k.intent = String.format(Locale.US, "MOVING %s", side < 0 ? "LEFT" : "RIGHT");
                 e = event("p-leave", Advisor.INFO, "Car ahead is changing lanes", null, k.id, t);
@@ -97,22 +89,6 @@ public final class Predictor {
         if ((same != null && t - same < 20000) || (any != null && t - any < 8000)) return null;
         last.put(code + id, t); last.put(code, t);
         return new Safety.Event(code, level, text, speak);
-    }
-
-    /** counts side-to-side reversals of more than 0.7 m within the last 10 seconds */
-    private static void weave(Past p, long t, double lat) {
-        if (Double.isNaN(p.extreme)) p.extreme = lat;
-        double d = lat - p.extreme;
-        if (p.direction >= 0 && d > 0 || p.direction <= 0 && d < 0) {
-            if (p.direction == 0 && Math.abs(d) < 0.7) return;
-            p.direction = d > 0 ? 1 : -1;
-            p.extreme = lat;
-        } else if (Math.abs(d) > 0.7) {
-            p.swings.addLast(t);
-            p.direction = -p.direction;
-            p.extreme = lat;
-        }
-        while (!p.swings.isEmpty() && t - p.swings.peekFirst() > 10000) p.swings.removeFirst();
     }
 
     /** least-squares change per second of one sample column over the last window, NaN if too little data */

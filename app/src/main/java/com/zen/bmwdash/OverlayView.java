@@ -26,6 +26,8 @@ final class OverlayView extends View {
     private double ego;
     String leadName = "";
     float laneShift;
+    /** keep the road clear: parked cars are not drawn and only the cars that matter get a label */
+    boolean clean = true;
     int heat;
     private ArRenderer ar;
     private ArRenderer.Guide guide;
@@ -138,6 +140,7 @@ final class OverlayView extends View {
             color = gap < 1.2 ? Ui.RED : gap < 2 ? Ui.AMBER : Ui.GREEN;
         }
         if (t.motion == Track.PARKED) {
+            if (clean) return;
             p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.2f * d); p.setColor(0x99AAB4C8);
             c.drawRoundRect(r, 6 * d, 6 * d, p);
             if (r.width() > 60 * d) {
@@ -158,6 +161,8 @@ final class OverlayView extends View {
             p.setStyle(Paint.Style.FILL); p.setColor((color & 0x00FFFFFF) | 0x22000000);
             c.drawRoundRect(r, 6 * d, 6 * d, p);
         }
+        boolean cutting = t.intent.startsWith("MOVING INTO");
+        if (vehicle && !t.lead && !cutting && (clean || r.width() < 22 * d)) return;
         if (r.width() < 22 * d && !t.lead && t.signal == 0 && t.intent.isEmpty()) return;
         String s = t.label.toUpperCase(java.util.Locale.US);
         if (t.signal != 0) s = t.signal == 1 ? "RED LIGHT" : t.signal == 2 ? "YELLOW LIGHT" : "GREEN LIGHT";
@@ -169,7 +174,8 @@ final class OverlayView extends View {
                 if (ego > 3 && other > -2) s += "  •  " + Ui.speed(Math.max(0, other), mph) + " " + Ui.unit(mph);
             }
         }
-        if (!t.intent.isEmpty()) s = t.intent + "  \u2022  " + s;
+        if (!t.intent.isEmpty() && (t.lead || cutting)) s = t.intent + "  \u2022  " + s;
+        if (t.lead && t.lamps) s = "LIGHTS AHEAD  \u2022  " + s;
         if (t.lead && !leadName.isEmpty()) s = leadName + "  \u2022  " + s;
         p.setTextSize((t.lead ? 15 : 11) * d); p.setTypeface(Typeface.DEFAULT_BOLD); p.setStyle(Paint.Style.FILL);
         float tw = p.measureText(s), pad = 6 * d, th = p.getTextSize() + pad;

@@ -30,8 +30,19 @@ public class CoreTest {
             for (int c = (int)(x*W)-half; c <= (int)(x*W)+half; c++) if (c >= 0 && c < W) g[r*W+c] += 20;
         }
     }
+    /** box of a 1.85 x 4.5 x 1.55 m car, x right and z ahead, with the default camera, side included */
+    static Detection seen(float x, float z) {
+        float f = .65f, a = 9f / 16f, hz = .5f, c = .5f, h = 1.25f;
+        float l = 9, r = -9;
+        for (float dx : new float[]{-.925f, .925f}) for (float dz : new float[]{0, 4.5f}) {
+            float u = c + f * (x + dx) / (z + dz); l = Math.min(l, u); r = Math.max(r, u);
+        }
+        float bottom = hz + f * h / z / a, top = bottom - f * 1.55f / z / a;
+        return new Detection("car", .8f, l, top, r, bottom);
+    }
+
     static Track car(int id, float distance, float lateral, float rate) {
-        Track c = new Track(); c.id = id; c.label = "car"; c.hits = 20; c.distance = distance; c.lateral = lateral; c.rangeRate = rate; c.motion = Track.MOVING; return c;
+        Track c = new Track(); c.id = id; c.label = "car"; c.hits = 20; c.distance = distance; c.lateral = lateral; c.rangeRate = rate; c.motion = Track.MOVING; c.pathX = lateral; c.inPath = Math.abs(lateral) < 1.5f; return c;
     }
     public static void main(String[] a) {
         LaneDetector d = new LaneDetector();
@@ -87,7 +98,7 @@ public class CoreTest {
         Safety s2 = new Safety(); l.distance = 6;
         for (int t = 0; t <= 9000; t += 100) { Safety.Input si = new Safety.Input(); si.t = t; si.speed = 0; si.seeing = true; si.tracks = List.of(l); l.distance = t < 6000 ? 6 : 11; ev = s2.update(si); if (ev != null) break; }
         check("traffic moving", ev != null && ev.code.equals("go"));
-        Track person = new Track(); person.label = "person"; person.hits = 5; person.confirmed = true; person.distance = 12; person.lateral = .3f;
+        Track person = new Track(); person.label = "person"; person.hits = 5; person.confirmed = true; person.distance = 12; person.lateral = .3f; person.pathX = .3f;
         Safety.Input pi = new Safety.Input(); pi.t = 100; pi.speed = 12; pi.seeing = true; pi.tracks = List.of(person);
         ev = new Safety().update(pi); check("person in path", ev != null && ev.level == Advisor.DANGER);
         person.confirmed = false;
@@ -170,7 +181,7 @@ public class CoreTest {
         check("slowing predicted", pe != null && pe.code.equals("p-slow"));
         pr = new Predictor(); pe = null;
         for (int ms = 0; ms <= 9000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(4, 30, (float) Math.sin(ms / 600.0), 0))); if (x != null) pe = x; }
-        check("weaving", pe != null && pe.code.equals("p-weave"));
+        check("swerving neighbour no longer nags", pe == null || !pe.code.equals("p-weave"));
         pr = new Predictor(); pe = null;
         for (int ms = 0; ms <= 3000; ms += 100) { Safety.Event x = pr.update(ms, 20, List.of(car(5, 25, 3.5f - ms / 1000f, 0), car(6, 25, -2f - ms / 1000f, 0))); if (x != null) pe = x; }
         check("own turn ignored", pe == null);
@@ -190,22 +201,34 @@ public class CoreTest {
         int[] busy = new int[W*H]; for (int i = 0; i < busy.length; i++) busy[i] = (i % W / 6) % 2 == 0 ? 60 : 180;
         for (int ms = 8200; ms <= 12000; ms += 200) blind = vq.update(busy, W, H, 120, .9f, ms);
         check("view recovers", !blind);
-        // parked car beside the road while we drive at 12 m/s: no brake warning
-        MotionClassifier mc = new MotionClassifier(); Safety sp = new Safety(); Safety.Event pev = null; Track pk = null;
-        for (int ms = 0; ms <= 3000; ms += 100) {
-            pk = car(20, 40 - 12 * ms / 1000f, 1.3f, -12); pk.motion = 0; pk.lead = true; mc.update(ms, 12, List.of(pk));
-            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = List.of(pk); Safety.Event x = sp.update(si); if (x != null) pev = x;
+        // camera model: a car x metres right of us, z ahead, as the detector would box it, side included
+        // parked car beside the road while we drive at 12 m/s: parked, never the lead, no brake warning
+        Tracker tp = new Tracker(); tp.ego = 12; Safety sp = new Safety(); Safety.Event pev = null; Track pk = null;
+        for (int ms = 0; ms <= 2600; ms += 130) {
+            List<Track> o = tp.update(List.of(seen(3.0f, 40 - 12 * ms / 1000f)), ms, null);
+            pk = o.isEmpty() ? null : o.get(0);
+            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = o; Safety.Event x = sp.update(si); if (x != null) pev = x;
         }
-        check("parked quiet", pk.motion == Track.PARKED && !pk.lead && pev == null);
-        mc = new MotionClassifier(); Track mv = null;
-        for (int ms = 0; ms <= 2000; ms += 100) { mv = car(21, 20, 0, -1); mv.motion = 0; mv.lead = true; mc.update(ms, 12, List.of(mv)); }
-        check("moving car", mv.motion == Track.MOVING && mv.lead);
-        mc = new MotionClassifier(); sp = new Safety(); pev = null;
-        for (int ms = 0; ms <= 3000; ms += 100) {
-            Track k = car(22, 45 - 12 * ms / 1000f, 0.2f, -12); k.motion = 0; k.lead = true; mc.update(ms, 12, List.of(k));
-            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = List.of(k); Safety.Event x = sp.update(si); if (x != null && x.code.equals("brake")) pev = x;
+        check("parked quiet", pk != null && pk.motion == Track.PARKED && !pk.lead && !pk.inPath && pev == null);
+        Tracker tm = new Tracker(); tm.ego = 12; Track mv = null;
+        for (int ms = 0; ms <= 2000; ms += 130) { List<Track> o = tm.update(List.of(seen(0.1f, 20)), ms, null); mv = o.isEmpty() ? null : o.get(0); }
+        check("moving car", mv != null && mv.motion == Track.MOVING && mv.lead && mv.inPath);
+        Tracker tn = new Tracker(); tn.ego = 12; Track nx = null;
+        for (int ms = 0; ms <= 2000; ms += 130) { List<Track> o = tn.update(List.of(seen(3.6f, 14)), ms, null); nx = o.isEmpty() ? null : o.get(0); }
+        check("next lane car is not ours", nx != null && !nx.lead && !nx.inPath && Math.abs(nx.lateral - 3.6f) < 0.8f);
+        Tracker ts = new Tracker(); ts.ego = 12; sp = new Safety(); pev = null; Track stc = null;
+        for (int ms = 0; ms <= 2600; ms += 130) {
+            List<Track> o = ts.update(List.of(seen(0.2f, 45 - 12 * ms / 1000f)), ms, null); stc = o.isEmpty() ? null : o.get(0);
+            Safety.Input si = new Safety.Input(); si.t = ms; si.speed = 12; si.seeing = true; si.tracks = o; Safety.Event x = sp.update(si); if (x != null && x.code.equals("brake")) pev = x;
         }
-        check("stopped car dead ahead still warns", pev != null);
+        check("stopped car dead ahead still warns", pev != null && stc.motion == Track.STOPPED && stc.lead);
+        Tracker tc = new Tracker(); tc.ego = 15; tc.curvature = 1 / 150.0; List<Track> bend = null;
+        for (int ms = 0; ms <= 1500; ms += 130) bend = tc.update(List.of(seen(-3f, 30), seen(0.5f, 30)), ms, null);
+        Track onBend = bend.get(0).lateral < 0 ? bend.get(0) : bend.get(1), straight = onBend == bend.get(0) ? bend.get(1) : bend.get(0);
+        check("path follows the bend", onBend.inPath && onBend.lead && !straight.inPath);
+        Tracker tg = new Tracker(); tg.ego = 0; Track go = null;
+        for (int ms = 0; ms <= 2000; ms += 130) { List<Track> o = tg.update(List.of(seen(0f, 8 + 4 * ms / 1000f)), ms, null); go = o.isEmpty() ? null : o.get(0); }
+        check("car pulling away while we wait", go != null && go.motion == Track.MOVING);
         Track side = new Track(); side.id = 1; side.label = "traffic light"; side.left = .8f; side.right = .84f; side.top = .2f; side.bottom = .3f;
         Track mid = new Track(); mid.id = 2; mid.label = "traffic light"; mid.left = .52f; mid.right = .54f; mid.top = .2f; mid.bottom = .28f;
         check("our light only", new SignalPicker().pick(List.of(side, mid), .5f, .5f, 1920) == mid && !side.ours);
@@ -217,11 +240,22 @@ public class CoreTest {
         SignReader sr2 = new SignReader(); List<SignReader.Line> st2 = List.of(new SignReader.Line("STOP", 0, 0, 40, 20), new SignReader.Line("Bus Stop Cafe", 0, 80, 90, 95));
         sr2.read(st2, 1000); got = sr2.read(st2, 1500);
         check("stop word", got.size() == 1 && got.get(0).code.equals("stop"));
-        check("moving never slowed when cool", Pace.detectMs(0, 28, 0) <= 150 && Pace.detectMs(1, 12, 0) <= 150);
-        check("rests when parked", Pace.detectMs(0, 0, 10_000) == 330 && Pace.detectMs(0, 0, 200_000) == 600);
-        check("backs off when hot", Pace.detectMs(3, 28, 0) == 330 && Pace.detectMs(4, 28, 0) == 450 && Pace.frameMs(3) > Pace.frameMs(0));
-        int farN = 0, farSlow = 0; for (int i = 0; i < 9; i++) { if (Pace.pass(i, 28) == 4) farN++; if (Pace.pass(i, 12) == 4) farSlow++; }
-        check("far road at highway speed", farN == 3 && farSlow == 0 && Pace.signMs(0, 28) < Pace.signMs(0, 12));
+        check("road check never slowed when moving or warm", Pace.detectMs(0, 28, 0) <= 100 && Pace.detectMs(2, 12, 0) <= 100);
+        check("rests when parked", Pace.detectMs(0, 0, 10_000) == 300 && Pace.detectMs(0, 0, 200_000) == 600);
+        check("backs off only when hot", Pace.detectMs(3, 28, 0) == 160 && Pace.detectMs(4, 28, 0) == 260 && Pace.frameMs(3) > Pace.frameMs(0));
+        int farN = 0, farSlow = 0; for (int i = 0; i < 6; i++) { if (Pace.pass(i, 28) == 4) farN++; if (Pace.pass(i, 12) == 4) farSlow++; }
+        check("far road at highway speed", farN == 2 && farSlow == 0);
+        check("sign reading gives way first", Pace.signMs(2, 28) > Pace.signMs(0, 28) && Pace.signMs(0, 28) <= 1200 && Pace.signMs(3, 12) >= 2000);
+        // two red lamps level with each other, a little below the horizon: one car; a red wash: nothing
+        int TW = 480, TH = 270; int[] dark = new int[TW * TH];
+        for (int y = 150; y < 155; y++) { for (int x = 220; x < 226; x++) dark[y * TW + x] = 0xFFE02020; for (int x = 262; x < 268; x++) dark[y * TW + x] = 0xFFE02020; }
+        List<Detection> lamps = Taillights.find(dark, TW, TH, .5f, .85f, TH / (float) TW);
+        check("tail lamps make a car", lamps.size() == 1 && lamps.get(0).lamps && lamps.get(0).left < 220 / 480f && lamps.get(0).right > 268 / 480f);
+        int[] wash = new int[TW * TH]; java.util.Arrays.fill(wash, 0xFFD01818);
+        check("red wash is not a car", Taillights.find(wash, TW, TH, .5f, .85f, TH / (float) TW).isEmpty());
+        int[] sky = new int[TW * TH];
+        for (int y = 60; y < 65; y++) { for (int x = 220; x < 226; x++) sky[y * TW + x] = 0xFFE02020; for (int x = 262; x < 268; x++) sky[y * TW + x] = 0xFFE02020; }
+        check("red lights in the sky are not a car", Taillights.find(sky, TW, TH, .5f, .85f, TH / (float) TW).isEmpty());
         Scene sc = new Scene(); Track a1 = car(40, 30, 1, 0), noRange = car(41, Float.NaN, 0, 0), nearer = car(42, 12, -3, 0);
         sc.feed(List.of(a1, noRange, nearer), 1000); List<Scene.Thing> th = sc.step(1000);
         check("3d places only measured things, farN first", th.size() == 2 && th.get(0).id == 40);

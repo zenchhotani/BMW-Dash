@@ -58,7 +58,6 @@ import com.zen.bmwdash.core.Conditions;
 import com.zen.bmwdash.core.Geo;
 import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.Pace;
-import com.zen.bmwdash.core.MotionClassifier;
 import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.Predictor;
 import com.zen.bmwdash.core.Safety;
@@ -100,7 +99,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private TextView arButton;
     private SignalView signalView;
     private TextView trafficChip, weatherBanner, weatherButton, weatherSwitch, signChip;
-    private final MotionClassifier motion = new MotionClassifier();
+    /** gravity direction and turn rate about it, for the curve we are driving */
+    private final float[] gravity = new float[3];
+    private double yawRate;
     private long turningUntil, stopUntil, signUntil, signLimitAt, headingAt;
     private double signLimit = Double.NaN, signLimitMeters, lastHeading = Double.NaN;
     private String signLimitRoad = "";
@@ -582,7 +583,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         return Double.isNaN(signLimit) ? road.limit : signLimit;
     }
 
-    @Override public boolean wantsCar(int id, int widthPx) { return carId.wants(id, widthPx); }
+    /** naming the car ahead is an extra: it waits while the phone is hot */
+    @Override public boolean wantsCar(int id, int widthPx) { return heat < Pace.HOT && carId.wants(id, widthPx); }
 
     @Override public void onCarPicture(int id, Bitmap crop, int widthPx) {
         carId.identify(id, crop, widthPx, (car, r) -> {
@@ -598,7 +600,6 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     @Override public void onVision(List<Track> seen, LaneState l, int w, int h, int fps) {
         lane = l;
         tracks = seen;
-        motion.update(SystemClock.elapsedRealtime(), speed, seen);
         CarId.Result known = null;
         for (Track t : seen) if (t.lead) known = carId.get(t.id);
         overlay.leadName = known == null ? "" : known.label();
@@ -612,9 +613,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         if (guess != null) { predicted = guess; predictedAt = seenAt; }
         // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
         overlay.laneShift = prefs.laneShift();
+        overlay.clean = prefs.cleanScreen();
         if (prefs.view3d()) { roadView.mph = prefs.mph(); roadView.show(seen, l, speed, lanesOn() && !lanesUnsafe(l)); }
         overlay.show(seen, calibrating || (lanesOn() && l.confident && !lanesUnsafe(l)) ? l : null, w, h, speed, prefs.mph());
-        visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
+        // heat is shown quietly here, never as a message over the road
+        visionChip.setText((heat >= Pace.HOT ? "\uD83C\uDF21 " : "◉ ") + "AI " + fps + " fps  •  " + (camera == null ? "" : camera.engine() + "  •  ")
+                + cars + (cars == 1 ? " vehicle" : " vehicles"));
         visionChip.setTextColor(Ui.CYAN);
         refresh();
     }
@@ -661,9 +665,14 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         gauges.invalidate();
         applyNight();
         // without a fresh GPS fix we may well be moving, so never slow down on a guess
-        if (camera != null) camera.pace(fresh ? speed : 10, heat);
+        if (camera != null) {
+            camera.pace(fresh ? speed : 10, heat);
+            // the bend we are on bends the path we check for cars; only trusted while really moving
+            double curve = fresh && speed > 4 ? Math.max(-0.03, Math.min(0.03, yawRate / speed)) : 0;
+            camera.motion(fresh ? speed : Double.NaN, curve);
+        }
         overlay.heat = heat;
-        map.maxFps(heat >= Pace.HOT ? 15 : heat >= Pace.WARM ? 20 : 30);
+        map.maxFps(heat >= Pace.HOT ? 12 : heat >= Pace.WARM ? 20 : 30);
         alarm.clean = prefs.cleanScreen();
 
         String name = road.name;
@@ -813,7 +822,6 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             if (prefs.voice()) say("Bridge ahead. Possible ice.");
         }
         if (now - bridgeSaidAt < 12_000) line(b, "\u2744 Bridge ahead: possible ice");
-        if (heat >= Pace.HOT) line(b, "\uD83C\uDF21 Phone hot: working slower, alerts may come later");
         if (kind != Conditions.CLEAR && kind != remindedKind && fresh && speed > 2) {
             remindedKind = kind;
             String tip = kind == Conditions.SNOW || kind == Conditions.ICE ? "Snow mode. Headlights on, and make sure all snow is cleared off the car."
@@ -824,7 +832,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         String key = b.toString().replaceAll("[0-9.]+", "");
         if (!key.equals(weatherSeen)) { weatherSeen = key; weatherSince = now; }
         // problems that still apply stay up; news is read once and then cleared away
-        boolean stays = !prefs.cleanScreen() || speed <= .7 || blind || now - bridgeSaidAt < 12_000 || heat >= Pace.HOT;
+        boolean stays = !prefs.cleanScreen() || speed <= .7 || blind || now - bridgeSaidAt < 12_000;
         weatherBanner.setVisibility(b.length() == 0 || !(stays || now - weatherSince < 8000) ? View.GONE : View.VISIBLE);
     }
 
@@ -1182,7 +1190,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         boolean tucked = prefs.cleanScreen() && speed > 3 && !calibrating && !asked;
         buttonScroll.setVisibility((!calm && !tucked) || asked ? View.VISIBLE : View.GONE);
         routeScroll.setVisibility(calm ? View.GONE : View.VISIBLE);
-        visionChip.setVisibility(calm || prefs.cleanScreen() && speed > 3 ? View.GONE : View.VISIBLE);
+        visionChip.setVisibility((calm || prefs.cleanScreen() && speed > 3) && heat < Pace.HOT ? View.GONE : View.VISIBLE);
         if (tucked) arButton.setVisibility(View.GONE);
         // the switches come back with a tap on the picture
         weatherSwitch.setVisibility(tucked ? View.GONE : View.VISIBLE);
@@ -1355,6 +1363,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     @Override public void onSensorChanged(SensorEvent e) {
         float x = e.values[0], y = e.values[1], z = e.values[2];
+        if (e.sensor.getType() == Sensor.TYPE_GRAVITY) { gravity[0] = x; gravity[1] = y; gravity[2] = z; return; }
+        if (e.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
+            // turning about the vertical, whichever way the phone is mounted; positive is to the left
+            double g = Math.sqrt(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]);
+            if (g > 5) yawRate += 0.1 * ((x * gravity[0] + y * gravity[1] + z * gravity[2]) / g - yawRate);
+            return;
+        }
         long now = SystemClock.elapsedRealtime();
         if (x * x + y * y + z * z > 24 * 24 && now - lastImpact > 10000) {
             lastImpact = now;
@@ -1387,6 +1402,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         startLocation();
         Sensor a = sensors.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
         if (a != null) sensors.registerListener(this, a, SensorManager.SENSOR_DELAY_GAME);
+        for (int type : new int[]{Sensor.TYPE_GRAVITY, Sensor.TYPE_GYROSCOPE}) {
+            Sensor s = sensors.getDefaultSensor(type);
+            if (s != null) sensors.registerListener(this, s, SensorManager.SENSOR_DELAY_GAME);
+        }
         handler.post(tick);
     }
     @Override protected void onPause() {

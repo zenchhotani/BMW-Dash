@@ -27,9 +27,24 @@ public final class Track {
     public int motion;
     /** what this driver seems to be doing, empty when nothing notable */
     public String intent = "";
-    /** metres right of our axis, NaN when unknown */
+    /** metres right of our axis, NaN when unknown; for vehicles the middle of the back, not of the box */
     public float lateral = Float.NaN;
+    /** metres right of where our own car will be at that distance, allowing for the bend we are taking */
+    public float pathX = Float.NaN;
+    /** in front of our car's own path, so it matters for braking */
+    public boolean inPath;
+    /** seconds to contact from how fast it grows in the picture, NaN when not closing */
+    public float ttc = Float.NaN;
+    /** growth of the picture per second, d ln(size)/dt */
+    public float growth = Float.NaN;
     final ArrayDeque<float[]> history = new ArrayDeque<>();
+    /** {seconds, ln height, centre x} of the raw boxes, for growth and sideways motion */
+    final ArrayDeque<float[]> sizes = new ArrayDeque<>();
+    /** only ever seen as a pair of tail lamps at night */
+    public boolean lamps = true;
+    float stillFor, goingFor;
+    boolean moved;
+    long judgedAt = -1;
 
     public boolean isVehicle() {
         return label.equals("car") || label.equals("truck") || label.equals("bus") || label.equals("motorcycle");

@@ -10,19 +10,20 @@ public final class Pace {
     /** faster than this (about 50 mph) the far road needs the attention */
     public static final double HIGHWAY = 22;
 
-    /** shortest time between two looks at the road, ms */
+    /**
+     * Shortest time between two looks at the road, ms. Safety comes first: a warm phone does not slow
+     * the road check, only extras; only a severely hot phone backs off, and never below about 4 looks a second.
+     */
     public static long detectMs(int heat, double speed, long stillMs) {
-        long base = speed > 1 || stillMs < 4000 ? 140 : stillMs < 90_000 ? 330 : 600;
-        long floor = heat >= 4 ? 450 : heat >= HOT ? 330 : heat >= WARM ? 220 : 0;
+        long base = speed > 1 || stillMs < 4000 ? 90 : stillMs < 90_000 ? 300 : 600;
+        long floor = heat >= 4 ? 260 : heat >= HOT ? 160 : 0;
         return Math.max(base, floor);
     }
 
-    /** shortest time between two sign readings, ms */
+    /** shortest time between two sign readings, ms; reading text is costly, so it is the first to give way */
     public static long signMs(int heat, double speed) {
-        if (heat >= HOT) return speed > HIGHWAY ? 700 : 1400;
-        if (speed > HIGHWAY) return heat >= WARM ? 500 : 350;
-        if (speed < 1) return 1500;
-        return heat >= WARM ? 900 : 600;
+        long base = speed < 1 ? 2500 : speed > HIGHWAY ? 1100 : 800;
+        return heat >= HOT ? base * 3 : heat >= WARM ? base * 3 / 2 : base;
     }
 
     /** time between redraws of animated layers, ms */
@@ -33,7 +34,7 @@ public final class Pace {
      * 3 roadside, 4 far road at double detail. At highway speed the far road comes round most often.
      */
     public static int pass(long count, double speed) {
-        int[] order = speed > HIGHWAY ? new int[]{1, 4, 0, 4, 1, 3, 0, 4, 2} : new int[]{0, 1, 2, 0, 1, 3};
+        int[] order = speed > HIGHWAY ? new int[]{1, 4, 0, 1, 4, 3} : new int[]{0, 1, 2, 0, 1, 3};
         return order[(int) (count % order.length)];
     }
 }
