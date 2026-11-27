@@ -124,6 +124,31 @@ public class CoreTest {
         check("yellow lamp", SignalColor.classify(lamp(Y, 23), 20, 50) == SignalColor.YELLOW);
         check("dark housing", SignalColor.classify(lamp(0xFF202020, 6), 20, 50) == SignalColor.NONE);
         check("grey sky", SignalColor.classify(lamp(0xFFC8C8D0, 6), 20, 50) == SignalColor.NONE);
+        // fast lamp finder
+        {
+            int[] f = new int[W*H]; java.util.Arrays.fill(f, 0xFFB0B8C8);
+            for (int r = 40; r < 80; r++) for (int c = 225; c < 245; c++) f[r*W+c] = 0xFF181818;
+            for (int r = 46; r < 52; r++) for (int c = 232; c < 238; c++) f[r*W+c] = 0xFFFF2A20;
+            LampFinder lf = new LampFinder();
+            LampFinder.Lamp a1 = lf.find(f, W, H, .5f, .5f, null);
+            check("lamp seen at once", a1 != null && a1.color == SignalColor.RED && !a1.confirmed);
+            lf.find(f, W, H, .5f, .5f, null);
+            check("lamp confirmed on third look", lf.find(f, W, H, .5f, .5f, null).confirmed);
+            LampFinder inCar = new LampFinder(); List<float[]> cars = new ArrayList<>(); cars.add(new float[]{.4f,.1f,.6f,.45f});
+            for (int i = 0; i < 4; i++) check("lamp inside a vehicle ignored " + i, inCar.find(f, W, H, .5f, .5f, cars) == null);
+            int[] sky = new int[W*H]; java.util.Arrays.fill(sky, 0xFFB0B8C8);
+            for (int r = 46; r < 52; r++) for (int c = 232; c < 238; c++) sky[r*W+c] = 0xFFFF2A20;
+            check("lamp without a housing ignored", new LampFinder().find(sky, W, H, .5f, .5f, null) == null);
+            int[] sign = new int[W*H]; java.util.Arrays.fill(sign, 0xFF181818);
+            for (int r = 30; r < 90; r++) for (int c = 200; c < 290; c++) sign[r*W+c] = 0xFF10A040;
+            check("big green sign ignored", new LampFinder().find(sign, W, H, .5f, .5f, null) == null);
+            int[] low = f.clone();
+            check("lamp below the horizon ignored", new LampFinder().find(low, W, H, .15f, .5f, null) == null);
+            for (int r = 46; r < 52; r++) for (int c = 232; c < 238; c++) f[r*W+c] = 0xFF20E060;
+            LampFinder sw = new LampFinder(); for (int i = 0; i < 3; i++) sw.find(f, W, H, .5f, .5f, null);
+            check("green needs five looks", !sw.find(f, W, H, .5f, .5f, null).confirmed);
+            check("green lamp read", sw.find(f, W, H, .5f, .5f, null).color == SignalColor.GREEN);
+        }
         SignalState st = new SignalState();
         check("one read ignored", st.update(SignalColor.RED, 0) == SignalColor.NONE);
         check("two reads show", st.update(SignalColor.RED, 300) == SignalColor.RED);

@@ -34,7 +34,7 @@ public final class Pace {
      * 3 roadside, 4 far road at double detail. At highway speed the far road comes round most often.
      */
     public static int pass(long count, double speed) {
-        int[] order = speed > HIGHWAY ? new int[]{1, 4, 0, 1, 4, 3} : new int[]{0, 1, 2, 0, 1, 3};
+        int[] order = speed > HIGHWAY ? new int[]{1, 4, 0, 1, 4, 3} : new int[]{1, 2, 0, 1, 2, 3};
         return order[(int) (count % order.length)];
     }
 }

@@ -53,6 +53,7 @@ import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
 import com.zen.bmwdash.core.Pace;
+import com.zen.bmwdash.core.LampFinder;
 import com.zen.bmwdash.core.Taillights;
 import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.SignalColor;
@@ -128,6 +129,10 @@ final class CameraEngine {
     private List<Track> recent = new ArrayList<>();
     private final ViewQuality viewQuality = new ViewQuality();
     private final SignalState signalState = new SignalState();
+    private final LampFinder lampFinder = new LampFinder();
+    private final ExecutorService pixelPool = Executors.newSingleThreadExecutor();
+    private volatile int cycleMs, gapMs;
+    private long lastCycleAt;
     private final SignalPicker signalPicker = new SignalPicker();
     private final SignReader signReader = new SignReader();
     private com.google.mlkit.vision.text.TextRecognizer reader;
@@ -221,7 +226,7 @@ final class CameraEngine {
     void motion(double speed, double curvature) { fixSpeed = speed; pathCurve = curvature; }
 
     /** which chip runs detection and how long one look takes */
-    String engine() { return engine + " " + inferMs + " ms"; }
+    String engine() { return engine + " " + inferMs + " ms  \u2022  look " + cycleMs + " ms, every " + gapMs + " ms"; }
 
     /** focal length over upright frame width, as used for distances */
     float focal() { return tracker.focal; }
@@ -259,6 +264,8 @@ final class CameraEngine {
             if (speed > 1) stillSince = -1; else if (stillSince < 0) stillSince = now;
             if (now - lookedAt < Pace.detectMs(heat, speed, stillSince < 0 ? 0 : now - stillSince)) return;
             lookedAt = now;
+            if (lastCycleAt > 0) gapMs = (int) ((gapMs * 3 + (now - lastCycleAt)) / 4);
+            lastCycleAt = now;
             Bitmap raw = image.toBitmap();
             int deg = image.getImageInfo().getRotationDegrees();
             if (deg != 0) {
@@ -269,7 +276,16 @@ final class CameraEngine {
             long t = SystemClock.elapsedRealtime();
             float horizon = prefs.horizon(), center = prefs.center(), hood = prefs.hood();
 
-            Bitmap seen = enhance ? brighten(frame) : frame;
+            // the pixel work and the lane search run beside the AI instead of after it
+            final Bitmap whole = frame;
+            final boolean dark = enhance;
+            List<float[]> blocked = new ArrayList<>();
+            for (Track k : recent)
+                if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
+            laneDetector.ignore = blocked;
+            java.util.concurrent.Future<Pixels> side = pixelPool.submit(() -> pixels(whole, dark, horizon, hood, center));
+
+            Bitmap seen = dark ? brighten(frame) : frame;
             // take turns: whole frame and road zoom most often, then overhead signals and roadside signs
             List<Detection> dets = new ArrayList<>();
             int pass = Pace.pass(frameCount++, speed);
@@ -284,29 +300,17 @@ final class CameraEngine {
                 detect(crop, cx, cy, cw, ch, w, h, dets);
                 crop.recycle();
             }
+            long tDetected = SystemClock.elapsedRealtime();
+            Pixels pp = side.get();
+            int lw = pp.lw, lh = pp.lh;
+            int[] px = pp.px, gray = pp.gray;
             tracker.horizon = horizon; tracker.center = center; tracker.cameraHeight = prefs.cameraHeight();
             tracker.aspect = h / (float) w;
             tracker.focal = focalOverLong * Math.max(w, h) / w;
             tracker.ego = fixSpeed; tracker.curvature = pathCurve;
 
-            int lw = w >= h ? 480 : 270, lh = Math.max(1, lw * h / w);
-            Bitmap tiny = Bitmap.createScaledBitmap(frame, lw, lh, true);
-            int[] px = new int[lw * lh];
-            tiny.getPixels(px, 0, lw, 0, 0, lw, lh);
-            if (tiny != frame) tiny.recycle();
-            int[] gray = new int[px.length];
-            long sum = 0;
-            boolean[] yellow = new boolean[px.length];
-            for (int i = 0; i < px.length; i++) {
-                int r = (px[i] >> 16) & 255, g = (px[i] >> 8) & 255, b = px[i] & 255;
-                int lum = (r * 77 + g * 150 + b * 29) >> 8;
-                sum += lum;
-                gray[i] = enhance ? LUT[lum] : lum;
-                // by proportion, so yellow paint still counts in shade
-                yellow[i] = r > 65 && g > 50 && (r - b) * 4 > r && g - b > 15 && r >= g - 10 && (r - g) * 5 < r * 2;
-            }
             // people and animals must look right and not be a patch of glare
-            boolean dim = enhance || brightness < 90;
+            boolean dim = dark || brightness < 90;
             for (java.util.Iterator<Detection> it = dets.iterator(); it.hasNext(); ) {
                 Detection d = it.next();
                 if (RoadUserFilter.strict(d.label) && (!RoadUserFilter.plausible(d, horizon, h / (float) w, dim)
@@ -322,38 +326,45 @@ final class CameraEngine {
                 }
             }
 
-            List<float[]> blocked = new ArrayList<>();
-            for (Track k : recent)
-                if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
-            laneDetector.ignore = blocked;
-            LaneDetector.Result res = laneDetector.detect(gray, yellow, lw, lh, horizon, hood, center);
             laneState.horizon = horizon; laneState.aspect = h / (float) w; laneState.cameraHeight = prefs.cameraHeight();
-            laneState.update(res, t, center, hood);
+            laneState.update(pp.res, t, center, hood);
             List<Track> tracks = tracker.update(dets, t, laneState);
             recent = tracks;
 
-            brightness += 0.05f * (sum / (float) px.length - brightness);
+            brightness += 0.05f * (pp.mean - brightness);
 
-            final boolean unclear = viewQuality.update(gray, lw, lh, sum / (float) px.length, hood, t);
+            final boolean unclear = viewQuality.update(gray, lw, lh, pp.mean, hood, t);
 
             Track ahead = null;
             for (Track k : tracks) if (k.lead) ahead = k;
-            // only the one light judged to be ours is read
+            // only the one light judged to be ours is read, on every look: the lamp is read from the
+            // last place the model saw it, and the lamp finder watches the pixels in between
             Track ours = signalPicker.pick(tracks, center, horizon, w);
             int read = SignalColor.NONE;
             if (ours != null) {
-                if (ours.lastSeen == t) {
-                    int x = clamp((int) (ours.left * w), 0, w - 2), y = clamp((int) (ours.top * h), 0, h - 2);
-                    int bw = clamp((int) ((ours.right - ours.left) * w), 1, w - x), bh = clamp((int) ((ours.bottom - ours.top) * h), 1, h - y);
+                long age = t - ours.lastSeen;
+                if (age <= 1200) {
+                    float pad = age == 0 ? 0f : 0.25f;
+                    float bwf = ours.right - ours.left, bhf = ours.bottom - ours.top;
+                    int x = clamp((int) ((ours.left - bwf * pad) * w), 0, w - 2), y = clamp((int) ((ours.top - bhf * pad) * h), 0, h - 2);
+                    int bw = clamp((int) (bwf * (1 + 2 * pad) * w), 1, w - x), bh = clamp((int) (bhf * (1 + 2 * pad) * h), 1, h - y);
                     int[] lp = new int[bw * bh];
                     // the untouched frame: night brightening would wash the lamp colour out
                     frame.getPixels(lp, 0, bw, x, y, bw, bh);
                     read = SignalColor.classify(lp, bw, bh);
-                    lampColors.put(ours.id, read);
+                    if (age == 0 || read != SignalColor.NONE) lampColors.put(ours.id, read);
                 }
                 ours.signal = lampColors.get(ours.id);
             }
             if (lampColors.size() > 200) lampColors.clear();
+            List<float[]> road = new ArrayList<>();
+            for (Track k : tracks) if (k.isVehicle() || k.label.equals("person")) road.add(new float[]{k.left, k.top, k.right, k.bottom});
+            LampFinder.Lamp lamp = lampFinder.find(px, lw, lh, horizon, center, road);
+            if (lamp != null && lamp.confirmed) {
+                boolean inOurs = ours != null && lamp.cx >= ours.left - 0.02f && lamp.cx <= ours.right + 0.02f
+                        && lamp.cy >= ours.top - 0.02f && lamp.cy <= ours.bottom + 0.02f;
+                if (ours == null || inOurs || read == SignalColor.NONE) read = lamp.color;
+            }
             int light = signalState.update(read, t);
             if (!reading && t - readAt >= Pace.signMs(heat, speed)) readSigns(frame, horizon, t);
             if (ahead != null && ahead.hits >= 5) {
@@ -368,6 +379,7 @@ final class CameraEngine {
                 }
             }
 
+            cycleMs = (int) ((cycleMs * 3 + (SystemClock.elapsedRealtime() - now)) / 4);
             fpsFrames++;
             if (t - fpsStart >= 1000) { fps = (int) Math.round(fpsFrames * 1000.0 / (t - fpsStart)); fpsFrames = 0; fpsStart = t; }
             final int fw = w, fh = h, rate = fps, signalNow = light;
@@ -380,6 +392,38 @@ final class CameraEngine {
         } finally {
             image.close();
         }
+    }
+
+    /** the small copy of the frame: colours, brightness, grey for lane finding, and the lanes themselves */
+    private static final class Pixels {
+        int lw, lh;
+        int[] px, gray;
+        float mean;
+        LaneDetector.Result res;
+    }
+
+    private Pixels pixels(Bitmap frame, boolean dark, float horizon, float hood, float center) {
+        int w = frame.getWidth(), h = frame.getHeight();
+        Pixels out = new Pixels();
+        out.lw = w >= h ? 480 : 270; out.lh = Math.max(1, out.lw * h / w);
+        Bitmap tiny = Bitmap.createScaledBitmap(frame, out.lw, out.lh, true);
+        out.px = new int[out.lw * out.lh];
+        tiny.getPixels(out.px, 0, out.lw, 0, 0, out.lw, out.lh);
+        if (tiny != frame) tiny.recycle();
+        out.gray = new int[out.px.length];
+        boolean[] yellow = new boolean[out.px.length];
+        long sum = 0;
+        for (int i = 0; i < out.px.length; i++) {
+            int r = (out.px[i] >> 16) & 255, g = (out.px[i] >> 8) & 255, b = out.px[i] & 255;
+            int lum = (r * 77 + g * 150 + b * 29) >> 8;
+            sum += lum;
+            out.gray[i] = dark ? LUT[lum] : lum;
+            // by proportion, so yellow paint still counts in shade
+            yellow[i] = r > 65 && g > 50 && (r - b) * 4 > r && g - b > 15 && r >= g - 10 && (r - g) * 5 < r * 2;
+        }
+        out.mean = sum / (float) out.px.length;
+        out.res = laneDetector.detect(out.gray, yellow, out.lw, out.lh, horizon, hood, center);
+        return out;
     }
 
     /** Reads sign text from one side of the upper road view; the sides take turns. */
@@ -552,5 +596,6 @@ final class CameraEngine {
             detector = gpu = cpu = null;
         });
         worker.shutdown();
+        pixelPool.shutdown();
     }
 }
