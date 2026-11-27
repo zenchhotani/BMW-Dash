@@ -28,7 +28,7 @@ public final class LampFinder {
      */
     public Lamp find(int[] px, int w, int h, float horizon, float center, List<float[]> cars) {
         int x0 = Math.max(1, Math.round((center - 0.22f) * w)), x1 = Math.min(w - 2, Math.round((center + 0.22f) * w));
-        int y0 = Math.max(1, Math.round(0.03f * h)), y1 = Math.min(h - 2, Math.round((horizon - 0.02f) * h));
+        int y0 = Math.max(1, Math.round(0.03f * h)), y1 = Math.min(h - 2, Math.round((horizon - 0.06f) * h));
         if (x1 <= x0 || y1 <= y0 || px.length < w * h) return remember(null);
         int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
         byte[] mark = new byte[bw * bh];
@@ -68,6 +68,7 @@ public final class LampFinder {
             float cx = x0 + sx / (float) area, cy = y0 + sy / (float) area;
             if (insideCar(cars, cx / w, cy / h)) continue;
             if (!darkAround(px, w, h, x0 + minX, y0 + minY, x0 + maxX, y0 + maxY)) continue;
+            if (letteredFace(px, w, h, x0 + minX, y0 + minY, x0 + maxX, y0 + maxY)) continue;
             float score = area * (1f - 2.5f * Math.abs(cx / w - center));
             if (score > bestScore) { bestScore = score; best = new Lamp(color, cx / w, cy / h, false); }
         }
@@ -109,6 +110,23 @@ public final class LampFinder {
                 if (lum < 100) dark++;
             }
         return total > 0 && dark * 10 >= total * 6;
+    }
+
+    /** white lettering or a white border beside the red: that is a stop sign or a road sign, not a lamp */
+    private static boolean letteredFace(int[] px, int w, int h, int l, int t, int r, int b) {
+        int pad = Math.max(2, (r - l + b - t) / 4);
+        int white = 0, total = 0;
+        for (int y = t - pad; y <= b + pad; y++)
+            for (int x = l - pad; x <= r + pad; x++) {
+                if (x >= l && x <= r && y >= t && y <= b) continue;
+                if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                int p = px[y * w + x];
+                int rr = (p >> 16) & 255, gg = (p >> 8) & 255, bb = p & 255;
+                int mn = Math.min(rr, Math.min(gg, bb)), mx = Math.max(rr, Math.max(gg, bb));
+                total++;
+                if (mn >= 130 && mx - mn < mx * 0.4f) white++;
+            }
+        return total > 0 && white * 10 >= total;
     }
 
     /** red or green only: amber is too easily a turn signal or a street lamp to trust without the model */

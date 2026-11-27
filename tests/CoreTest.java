@@ -124,6 +124,14 @@ public class CoreTest {
         check("yellow lamp", SignalColor.classify(lamp(Y, 23), 20, 50) == SignalColor.YELLOW);
         check("dark housing", SignalColor.classify(lamp(0xFF202020, 6), 20, 50) == SignalColor.NONE);
         check("grey sky", SignalColor.classify(lamp(0xFFC8C8D0, 6), 20, 50) == SignalColor.NONE);
+        {
+            List<SignReader.Line> one = new ArrayList<>(); one.add(new SignReader.Line("STOP", .6f, .4f, .7f, .45f));
+            check("stop sign text trusted on one read", new SignReader().read(one, 1000).size() == 1);
+            Safety ssf = new Safety(); Safety.Input sin = new Safety.Input();
+            sin.t = 5000; sin.speed = 9; sin.seeing = true; sin.tracks = new ArrayList<>(); sin.stopRead = true; sin.limit = Double.NaN;
+            Safety.Event sev = ssf.update(sin);
+            check("read stop sign warns", sev != null && sev.code.equals("stopsign"));
+        }
         // fast lamp finder
         {
             int[] f = new int[W*H]; java.util.Arrays.fill(f, 0xFFB0B8C8);
@@ -270,7 +278,7 @@ public class CoreTest {
         check("backs off only when hot", Pace.detectMs(3, 28, 0) == 160 && Pace.detectMs(4, 28, 0) == 260 && Pace.frameMs(3) > Pace.frameMs(0));
         int farN = 0, farSlow = 0; for (int i = 0; i < 6; i++) { if (Pace.pass(i, 28) == 4) farN++; if (Pace.pass(i, 12) == 4) farSlow++; }
         check("far road at highway speed", farN == 2 && farSlow == 0);
-        check("sign reading gives way first", Pace.signMs(2, 28) > Pace.signMs(0, 28) && Pace.signMs(0, 28) <= 1200 && Pace.signMs(3, 12) >= 2000);
+        check("sign reading gives way first", Pace.signMs(2, 28) > Pace.signMs(0, 28) && Pace.signMs(0, 28) <= 1200 && Pace.signMs(3, 12) >= 1500);
         // two red lamps level with each other, a little below the horizon: one car; a red wash: nothing
         int TW = 480, TH = 270; int[] dark = new int[TW * TH];
         for (int y = 150; y < 155; y++) { for (int x = 220; x < 226; x++) dark[y * TW + x] = 0xFFE02020; for (int x = 262; x < 268; x++) dark[y * TW + x] = 0xFFE02020; }

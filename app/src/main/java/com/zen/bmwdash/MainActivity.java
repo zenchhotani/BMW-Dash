@@ -138,6 +138,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private TextView carCard, nightButton;
     private List<Track> tracks = new ArrayList<>();
     private int light, nightShown = -1, speedLeadId = -1;
+    private long stopReadAt = -100_000;
     private float brightness = 128;
     private boolean autoDark;
     private double theirSpeed = Double.NaN, recentSpeed;
@@ -562,6 +563,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             if (s.code.equals("stop")) {
                 if (speed <= 1) continue;
                 stopUntil = now + 3500;
+                stopReadAt = now;
             }
             signChip.setText("\uD83E\uDEA7 Sign: " + s.text);
             signUntil = now + 7000;
@@ -672,7 +674,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             camera.motion(fresh ? speed : Double.NaN, curve);
         }
         overlay.heat = heat;
-        map.maxFps(heat >= Pace.HOT ? 12 : heat >= Pace.WARM ? 20 : 30);
+        map.maxFps(heat >= Pace.HOT ? 10 : 15);
         alarm.clean = prefs.cleanScreen();
 
         String name = road.name;
@@ -706,6 +708,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         Safety.Input s = new Safety.Input();
         s.t = now; s.speed = speed; s.seeing = seeing; s.tracks = tracks; s.limit = limit;
         s.turning = now < turningUntil;
+        s.stopRead = now - stopReadAt < 2500;
         s.safeGap = in.safeGap; s.light = seeing ? light : 0;
         s.caution = Conditions.caution(kind, ice);
         Safety.Event event = safety.update(s);

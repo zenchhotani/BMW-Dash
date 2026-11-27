@@ -13,6 +13,7 @@ public final class Safety {
         }
     }
     public static final class Input {
+        public boolean stopRead;             // a STOP sign was just read as text
         public long t;                       // ms, monotonic
         public double speed;                 // m/s
         public boolean seeing;               // camera data is fresh
@@ -111,11 +112,13 @@ public final class Safety {
         if (ranged) { prevLeadId = lead.id; prevLeadDist = lead.distance; }
         else if (lead == null && in.seeing) { prevLeadDist = Float.NaN; }
 
-        // stop signs facing us: central or on our side of the road
-        if (in.seeing && in.tracks != null && v > 2.5)
+        // stop signs facing us: central or on our side of the road, seen by the model or read as text
+        boolean stopAhead = in.seeing && in.stopRead;
+        if (in.seeing && in.tracks != null)
             for (Track k : in.tracks)
-                if (k.label.equals("stop sign") && k.hits >= 2 && k.cx() > 0.35f && k.right - k.left > 0.012f && fire("stopsign", t, 15000))
-                    hold(new Event("stopsign", Advisor.WARN, "Stop sign ahead", "Stop sign ahead"), t, 3500);
+                if (k.label.equals("stop sign") && k.hits >= 2 && k.cx() > 0.35f && k.right - k.left > 0.012f) stopAhead = true;
+        if (stopAhead && v > 2.5 && fire("stopsign", t, 15000))
+            hold(new Event("stopsign", Advisor.WARN, "Stop sign ahead", "Stop sign ahead"), t, 3500);
 
         // people, animals and objects in our path
         if (in.seeing && in.tracks != null && v > 3) {

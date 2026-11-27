@@ -22,12 +22,12 @@ public final class Pace {
 
     /** shortest time between two sign readings, ms; reading text is costly, so it is the first to give way */
     public static long signMs(int heat, double speed) {
-        long base = speed < 1 ? 2500 : speed > HIGHWAY ? 1100 : 800;
+        long base = speed < 1 ? 2500 : speed > HIGHWAY ? 1100 : 550;
         return heat >= HOT ? base * 3 : heat >= WARM ? base * 3 / 2 : base;
     }
 
     /** time between redraws of animated layers, ms */
-    public static long frameMs(int heat) { return heat >= HOT ? 80 : heat >= WARM ? 50 : 33; }
+    public static long frameMs(int heat) { return heat >= HOT ? 80 : heat >= WARM ? 60 : 40; }
 
     /**
      * Which part of the picture to look at next: 0 whole, 1 road ahead, 2 overhead signals,

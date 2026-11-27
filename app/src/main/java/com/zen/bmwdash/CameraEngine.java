@@ -7,6 +7,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureRequest;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -173,6 +174,48 @@ final class CameraEngine {
         }
     }
 
+    private android.util.Range<Integer> steadyFps;
+    private boolean sharpEdges, quickNoise, fixedFocus;
+
+    /** what this camera can do for a sharper road picture */
+    private void probeCamera() {
+        try {
+            android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) ctx.getSystemService(Context.CAMERA_SERVICE);
+            for (String id : cm.getCameraIdList()) {
+                CameraCharacteristics cc = cm.getCameraCharacteristics(id);
+                Integer face = cc.get(CameraCharacteristics.LENS_FACING);
+                if (face == null || face != CameraCharacteristics.LENS_FACING_BACK) continue;
+                android.util.Range<Integer>[] ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+                if (ranges != null) for (android.util.Range<Integer> r : ranges) if (r.getLower() == 30 && r.getUpper() == 30) steadyFps = r;
+                int[] edges = cc.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES);
+                if (edges != null) for (int m : edges) if (m == CaptureRequest.EDGE_MODE_HIGH_QUALITY) sharpEdges = true;
+                int[] noise = cc.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES);
+                if (noise != null) for (int m : noise) if (m == CaptureRequest.NOISE_REDUCTION_MODE_FAST) quickNoise = true;
+                Float near = cc.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+                int[] af = cc.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES);
+                boolean canOff = false;
+                if (af != null) for (int m : af) if (m == CaptureRequest.CONTROL_AF_MODE_OFF) canOff = true;
+                fixedFocus = near != null && near > 0 && canOff;
+                break;
+            }
+        } catch (Exception e) { Log.w(TAG, "camera abilities unavailable", e); }
+    }
+
+    /**
+     * A road picture is far away and fast: lock focus at infinity so the lens never hunts on glare, cap the
+     * exposure at 1/30 s so night does not smear, and ask for crisp edges and light noise smoothing.
+     */
+    private <T> void sharp(androidx.camera.core.ExtendableBuilder<T> b) {
+        androidx.camera.camera2.interop.Camera2Interop.Extender<T> e = new androidx.camera.camera2.interop.Camera2Interop.Extender<>(b);
+        if (steadyFps != null) e.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, steadyFps);
+        if (sharpEdges) e.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY);
+        if (quickNoise) e.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST);
+        if (fixedFocus) {
+            e.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+            e.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, 0f);
+        }
+    }
+
     private void bind(ProcessCameraProvider provider, LifecycleOwner owner, PreviewView view, int rotation) {
         ResolutionSelector wide = new ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY).build();
@@ -180,15 +223,22 @@ final class CameraEngine {
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(new ResolutionStrategy(new Size(1280, 720),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build();
-        preview = new Preview.Builder().setResolutionSelector(wide).setTargetRotation(rotation).build();
+        probeCamera();
+        Preview.Builder pb = new Preview.Builder().setResolutionSelector(wide).setTargetRotation(rotation);
+        sharp(pb);
+        preview = pb.build();
         preview.setSurfaceProvider(view.getSurfaceProvider());
-        analysis = new ImageAnalysis.Builder().setResolutionSelector(small).setTargetRotation(rotation)
+        ImageAnalysis.Builder ab = new ImageAnalysis.Builder().setResolutionSelector(small).setTargetRotation(rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888).build();
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
+        sharp(ab);
+        analysis = ab.build();
         analysis.setAnalyzer(worker, this::analyze);
         Recorder recorder = new Recorder.Builder().setQualitySelector(
                 QualitySelector.from(Quality.FHD, FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD))).build();
-        video = VideoCapture.withOutput(recorder);
+        VideoCapture.Builder<Recorder> vb = new VideoCapture.Builder<>(recorder);
+        sharp(vb);
+        video = vb.build();
         video.setTargetRotation(rotation);
 
         provider.unbindAll();

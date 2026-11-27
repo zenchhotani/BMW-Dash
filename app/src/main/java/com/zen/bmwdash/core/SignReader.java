@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Turns text the camera read into road signs. Needs two agreeing reads before reporting. */
+/** Turns text the camera read into road signs. Needs two agreeing reads before reporting, except STOP: one clear read is enough. */
 public final class SignReader {
     public static final class Line {
         final String text; final float left, top, right, bottom;
@@ -63,7 +63,7 @@ public final class SignReader {
         for (Sign s : found) {
             String key = s.code + s.limit;
             Long before = seen.put(key, t);
-            if (before != null && t - before < 4000 && t > before) sure.add(s);
+            if (s.code.equals("stop") || (before != null && t - before < 4000 && t > before)) sure.add(s);
         }
         return sure;
     }

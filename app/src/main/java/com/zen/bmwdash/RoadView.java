@@ -82,7 +82,7 @@ final class RoadView extends View {
         List<Scene.Thing> things = scene.step(now);
         // a stale picture is worse than an empty one
         if (now - fed > 2000) { things.clear(); tracks = new ArrayList<>(); }
-        for (Track t : tracks) if (t.ours && t.label.equals("traffic light") && light != SignalColor.NONE) { signal(c, w, h); break; }
+        if (light != SignalColor.NONE) signal(c, w, h);
         stopSign(c, w, h);
         for (Scene.Thing o : things) thing(c, o, w, h);
         own(c, w, h);
