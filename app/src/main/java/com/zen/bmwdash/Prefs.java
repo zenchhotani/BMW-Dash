@@ -33,6 +33,10 @@ final class Prefs {
     String recents() { return p.getString("recents", "[]"); }
     /** 0 small, 1 large, 2 hidden */
     int mapSize() { return p.getInt("mapsize", 0); }
+    /** drawn 3D scene instead of the camera picture */
+    boolean view3d() { return p.getBoolean("view3d", false); }
+    /** keep the picture uncovered: small alerts, messages that fade, controls tucked away while moving */
+    boolean cleanScreen() { return p.getBoolean("clean", true); }
     boolean arRoute() { return p.getBoolean("arroute", true); }
     int storageGb() { return p.getInt("gb", 8); }
 

@@ -45,6 +45,17 @@ public final class LaneState {
     /** calibrated horizon row, 0..1, when known */
     public float horizon = Float.NaN;
 
+    /**
+     * The highest row the lane lines may be drawn to: below the point where they would meet,
+     * so they never cross into an X when the aim is a little off.
+     */
+    public float drawTop(float wanted) {
+        float gapSlope = rb - lb;
+        if (!hasLeft || !hasRight || gapSlope <= 1e-4f) return wanted;
+        float meet = (la - ra) / gapSlope;
+        return Math.max(wanted, meet + 0.05f);
+    }
+
     /** A frozen copy of the public values for another thread. */
     public LaneState snapshot() {
         LaneState s = new LaneState();

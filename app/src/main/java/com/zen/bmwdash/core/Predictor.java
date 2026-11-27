@@ -78,7 +78,7 @@ public final class Predictor {
             } else if (driving && k.lead && moving && accel < -1.8 && k.distance < speed * 3.5) {
                 k.intent = "SLOWING";
                 e = event("p-slow", Advisor.WARN, "Driver ahead is slowing: get ready to brake", "Car ahead slowing", k.id, t);
-            } else if (driving && p.swings.size() >= 3 && moving) {
+            } else if (driving && p.swings.size() >= 3 && speed > 9) {
                 k.intent = "WEAVING";
                 e = event("p-weave", Advisor.WARN, "Vehicle ahead is weaving: keep your distance",
                         "Vehicle ahead is weaving", k.id, t);

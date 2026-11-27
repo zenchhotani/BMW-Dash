@@ -19,6 +19,8 @@ final class GaugeView extends View {
     double speed, limit = Double.NaN, flow = Double.NaN, freeFlow = Double.NaN; // m/s
     float leadDistance = Float.NaN, laneOffset;
     boolean laneKnown, departing, hasKey;
+    /** the camera cannot be relied on to say the road ahead is empty */
+    boolean leadUnsure;
     String laneLabel = "SCANNING";
     private float shown;
 
@@ -146,8 +148,8 @@ final class GaugeView extends View {
         int col = !has ? Ui.DIM : Double.isNaN(gap) ? Ui.CYAN : gap < 1.2 ? Ui.RED : gap < 2 ? Ui.AMBER : Ui.GREEN;
         tile(c, x, y, w, h, col);
         center(c, "CAR AHEAD", x + w / 2, y + h * .22f, Math.min(h * .12f, w * .1f), Ui.DIM, bold);
-        center(c, has ? Ui.range(leadDistance, mph) : "CLEAR", x + w / 2, y + h * .62f, Math.min(h * .34f, w * .27f), col, heavy);
-        center(c, Double.isNaN(gap) ? (has ? "ESTIMATED" : "NO VEHICLE") : String.format(java.util.Locale.US, "%.1f s GAP", gap),
+        center(c, has ? Ui.range(leadDistance, mph) : leadUnsure ? "--" : "CLEAR", x + w / 2, y + h * .62f, Math.min(h * .34f, w * .27f), col, heavy);
+        center(c, Double.isNaN(gap) ? (has ? "ESTIMATED" : leadUnsure ? "CAN'T TELL" : "NONE SEEN") : String.format(java.util.Locale.US, "%.1f s GAP", gap),
                 x + w / 2, y + h * .86f, Math.min(h * .12f, w * .09f), col, bold);
     }
 

@@ -43,3 +43,10 @@ single-camera estimates and get worse at night, in rain and on poorly marked roa
 ## Data
 OpenStreetMap contributors (Overpass, Nominatim), OpenFreeMap, OSRM, Open-Meteo, TomTom, Google MediaPipe.
 Your location is sent to these services to fetch road information. If you add an AI key, pictures of the car ahead are sent to that provider. Search text goes to TomTom, Photon or Nominatim.
+
+## 3D View, clean screen and heat
+
+- **3D View** button (also in Setup): a drawn scene of what the front camera measures. Off shows the camera picture. It cannot see beside or behind the car, and positions are estimates.
+- **Clean screen** (Setup, on by default): small danger banner instead of a covered screen, messages fade, controls hide while moving until you tap the picture.
+- **Heat**: the app rests the detector when parked and slows down when the phone reports it is warm or hot.
+- **Highway**: above about 50 mph the far road is checked at higher detail and signs are read more often.

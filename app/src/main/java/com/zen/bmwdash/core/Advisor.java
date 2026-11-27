@@ -15,6 +15,8 @@ public final class Advisor {
         public String incident; // nearby incident text or null
         public double safeGap = 2; // seconds, longer in bad weather
         public double aheadFlow = Double.NaN; // live traffic speed further up the road
+        /** dark and wet, or blocked: an empty picture proves nothing */
+        public boolean poorView;
         public double suggested = Double.NaN; // sensible top speed for the weather
     }
 
@@ -49,6 +51,7 @@ public final class Advisor {
         if (in.weather != null) return new Advice(INFO, in.weather, null);
         if (l != null && !Float.isNaN(l.distance) && moving && l.distance / Math.max(in.speed, 1) < in.safeGap)
             return new Advice(INFO, "Ease back to a " + Math.round(in.safeGap) + " second gap", null);
-        return new Advice(GOOD, moving ? "Road looks clear. Drive smoothly." : "Ready when you are.", null);
+        if (in.poorView && moving) return new Advice(INFO, "Low camera visibility: do not rely on alerts", null);
+        return new Advice(GOOD, moving ? "No hazard detected. Drive smoothly." : "Ready when you are.", null);
     }
 }

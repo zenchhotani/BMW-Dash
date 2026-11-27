@@ -18,6 +18,8 @@ final class ArRenderer {
         long fixTime;
         int direction;
         String label = "";
+        /** smaller sign, only near the turn */
+        boolean compact;
     }
 
     private static final float NEAR = 4.5f, HALF = 1.0f;
@@ -51,7 +53,7 @@ final class ArRenderer {
         if (!Double.isNaN(g.turnAlong)) {
             double to = g.turnAlong - along;
             // a far-off turn stays on the card above: a big arrow now would point the wrong way
-            if (to > -5 && to < 350) {
+            if (to > -5 && to < (g.compact ? 220 : 350)) {
                 sign(c, g, Math.max(0, to), view, along, viewW, viewH);
                 if (g.direction != 0 && to < 180) sideChevrons(c, g.direction, viewW, viewH, (now % 700) / 700f);
             }
@@ -125,6 +127,7 @@ final class ArRenderer {
                 y = Math.max(viewH * 0.34f, Math.min(viewH * 0.52f, sy(t[1], 3.5f)));
             }
         }
+        if (g.compact) r *= .65f;
         int color = g.direction == 0 ? Ui.BLUE : Ui.VIOLET;
         p.setShader(null);
         if (!Float.isNaN(ground)) {

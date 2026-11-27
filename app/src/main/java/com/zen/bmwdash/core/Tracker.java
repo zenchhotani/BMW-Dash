@@ -29,6 +29,7 @@ public final class Tracker {
                 float v = iou(tr.left, tr.top, tr.right, tr.bottom, d.left, d.top, d.right, d.bottom);
                 if (v > bestIou) { bestIou = v; best = i; }
             }
+            if (best < 0) best = nearest(tr, dets, used);
             if (best >= 0) { used[best] = true; apply(tr, dets.get(best), t, 0.65f); }
         }
         for (int i = 0; i < dets.size(); i++) {
@@ -48,6 +49,23 @@ public final class Tracker {
         for (Track tr : tracks)
             if (RoadUserFilter.strict(tr.label) ? tr.confirmed : tr.hits >= 2) out.add(copy(tr));
         return out;
+    }
+
+    /** Small far vehicles can jump clear of their old box between looks: match by nearness and like size. */
+    private int nearest(Track tr, List<Detection> dets, boolean[] used) {
+        float w = tr.right - tr.left;
+        if (!tr.isVehicle() || w > 0.12f) return -1;
+        int best = -1; float bestFar = 1f;
+        for (int i = 0; i < dets.size(); i++) {
+            Detection d = dets.get(i);
+            if (used[i] || !sameFamily(tr.label, d.label)) continue;
+            float size = (d.right - d.left) / Math.max(.001f, w);
+            if (size < 0.65f || size > 1.55f) continue;
+            float dx = ((d.left + d.right) - (tr.left + tr.right)) / 2, dy = ((d.top + d.bottom) - (tr.top + tr.bottom)) / 2;
+            float far = (float) Math.hypot(dx / w, dy / Math.max(.001f, tr.bottom - tr.top));
+            if (far < bestFar) { bestFar = far; best = i; }
+        }
+        return best;
     }
 
     private boolean overlapsExisting(Detection d) {

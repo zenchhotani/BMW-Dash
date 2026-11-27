@@ -70,6 +70,7 @@ final class MapPanel extends FrameLayout {
         showRecenter();
         view.getMapAsync(m -> {
             map = m;
+            view.setMaximumFps(fps);
             m.addOnCameraMoveStartedListener(reason -> {
                 if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) { follow = false; showRecenter(); }
             });
@@ -77,6 +78,10 @@ final class MapPanel extends FrameLayout {
             loadStyle();
         });
     }
+
+    private int fps = 30;
+    /** the map is redrawn less often when the phone is warm */
+    void maxFps(int f) { if (f != fps) { fps = f; if (map != null) view.setMaximumFps(f); } }
 
     @Override public boolean dispatchTouchEvent(MotionEvent e) {
         getParent().requestDisallowInterceptTouchEvent(true);

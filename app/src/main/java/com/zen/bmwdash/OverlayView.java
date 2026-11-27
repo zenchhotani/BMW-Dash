@@ -26,6 +26,7 @@ final class OverlayView extends View {
     private double ego;
     String leadName = "";
     float laneShift;
+    int heat;
     private ArRenderer ar;
     private ArRenderer.Guide guide;
     private float focal = .65f, camHeight = 1.2f;
@@ -64,7 +65,7 @@ final class OverlayView extends View {
             }
             ar.draw(c, guide, ox, oy, w, h, getWidth(), getHeight());
             c.restore();
-            postInvalidateDelayed(33);
+            postInvalidateDelayed(com.zen.bmwdash.core.Pace.frameMs(heat));
         }
         for (Track t : tracks)
             // other roads' signals are not shown, so only the one for us stands out
@@ -81,6 +82,8 @@ final class OverlayView extends View {
 
     private void drawLane(Canvas c, float ox, float oy, float w, float h) {
         float y0 = Math.min(horizon + .10f, .8f), y1 = Math.max(hood, y0 + .1f);
+        y0 = lane.drawTop(y0);
+        if (y0 > y1 - .05f) return;
         int color = lane.departing ? Ui.RED : lane.position == LaneState.Position.CENTERED ? Ui.CYAN : Ui.AMBER;
         // the route ribbon replaces the lane fill while guiding
         if (lane.hasLeft && lane.hasRight && guide == null) {

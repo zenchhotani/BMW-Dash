@@ -51,6 +51,7 @@ import com.zen.bmwdash.core.RoadUserFilter;
 import com.zen.bmwdash.core.Detection;
 import com.zen.bmwdash.core.LaneDetector;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.Pace;
 import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.SignalColor;
 import com.zen.bmwdash.core.SignalPicker;
@@ -109,6 +110,9 @@ final class CameraEngine {
     private volatile int maxBoost;
     private Camera boundCamera;
     private float brightness = 128;
+    private volatile double egoSpeed;
+    private volatile int heat;
+    private long lookedAt, stillSince = -1;
     private static final int[] LUT = new int[256];
     static { for (int i = 0; i < 256; i++) LUT[i] = (int) Math.round(255 * Math.pow(i / 255.0, 0.55)); }
     private boolean wantRecording, lockCurrent, closed, paused;
@@ -195,6 +199,9 @@ final class CameraEngine {
         if (video != null) video.setTargetRotation(rotation);
     }
 
+    /** our speed and the phone's thermal level decide how often to work */
+    void pace(double speed, int thermal) { egoSpeed = speed; heat = thermal; }
+
     /** focal length over upright frame width, as used for distances */
     float focal() { return tracker.focal; }
 
@@ -226,6 +233,11 @@ final class CameraEngine {
         Bitmap frame = null;
         try {
             if (detector == null) return;
+            long now = SystemClock.elapsedRealtime();
+            double speed = egoSpeed;
+            if (speed > 1) stillSince = -1; else if (stillSince < 0) stillSince = now;
+            if (now - lookedAt < Pace.detectMs(heat, speed, stillSince < 0 ? 0 : now - stillSince)) return;
+            lookedAt = now;
             Bitmap raw = image.toBitmap();
             int deg = image.getImageInfo().getRotationDegrees();
             if (deg != 0) {
@@ -239,13 +251,13 @@ final class CameraEngine {
             Bitmap seen = enhance ? brighten(frame) : frame;
             // take turns: whole frame and road zoom most often, then overhead signals and roadside signs
             List<Detection> dets = new ArrayList<>();
-            int pass = new int[]{0, 1, 2, 0, 1, 3}[(int) (frameCount++ % 6)];
+            int pass = Pace.pass(frameCount++, speed);
             if (pass == 0) detect(seen, 0, 0, w, h, w, h, dets);
             else {
-                int cw = w / 2, ch = h / 2;
+                int cw = pass == 4 ? w * 17 / 50 : w / 2, ch = pass == 4 ? h * 17 / 50 : h / 2;
                 int cx = pass == 3 ? w - cw : clamp(Math.round(center * w) - cw / 2, 0, w - cw);
                 int top = Math.round(horizon * h) - (pass == 2 ? ch * 9 / 10 : ch * 3 / 5);
-                if (pass == 1) top = Math.round(horizon * h) - ch * 2 / 5;
+                if (pass == 1 || pass == 4) top = Math.round(horizon * h) - ch * 2 / 5;
                 int cy = clamp(top, 0, h - ch);
                 Bitmap crop = Bitmap.createBitmap(seen, cx, cy, cw, ch);
                 detect(crop, cx, cy, cw, ch, w, h, dets);
@@ -313,7 +325,7 @@ final class CameraEngine {
             }
             if (lampColors.size() > 200) lampColors.clear();
             int light = signalState.update(read, t);
-            if (!reading && t - readAt > 600) readSigns(frame, horizon, t);
+            if (!reading && t - readAt >= Pace.signMs(heat, speed)) readSigns(frame, horizon, t);
             if (ahead != null && ahead.hits >= 5) {
                 float bw = ahead.right - ahead.left, bh = ahead.bottom - ahead.top;
                 int x = clamp((int) ((ahead.left - bw * 0.08f) * w), 0, w - 2), y = clamp((int) ((ahead.top - bh * 0.08f) * h), 0, h - 2);
@@ -382,6 +394,8 @@ final class CameraEngine {
             // ignore our own bonnet and boxes cut off by the zoom window
             if (t > prefs.hood() - 0.03f || (rr - l > 0.85f && bb > prefs.hood())) continue;
             if (cw < w && (r.left <= 2 || r.right >= cw - 2)) continue;
+            // the far window is small: a box touching its top or bottom is only part of something
+            if (cw * 5 < w * 2 && (r.top <= 2 || r.bottom >= ch - 2)) continue;
             out.add(new Detection(c.categoryName(), c.score(), l, t, rr, bb));
         }
     }

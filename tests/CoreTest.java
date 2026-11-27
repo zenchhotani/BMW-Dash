@@ -217,6 +217,30 @@ public class CoreTest {
         SignReader sr2 = new SignReader(); List<SignReader.Line> st2 = List.of(new SignReader.Line("STOP", 0, 0, 40, 20), new SignReader.Line("Bus Stop Cafe", 0, 80, 90, 95));
         sr2.read(st2, 1000); got = sr2.read(st2, 1500);
         check("stop word", got.size() == 1 && got.get(0).code.equals("stop"));
+        check("moving never slowed when cool", Pace.detectMs(0, 28, 0) <= 150 && Pace.detectMs(1, 12, 0) <= 150);
+        check("rests when parked", Pace.detectMs(0, 0, 10_000) == 330 && Pace.detectMs(0, 0, 200_000) == 600);
+        check("backs off when hot", Pace.detectMs(3, 28, 0) == 330 && Pace.detectMs(4, 28, 0) == 450 && Pace.frameMs(3) > Pace.frameMs(0));
+        int farN = 0, farSlow = 0; for (int i = 0; i < 9; i++) { if (Pace.pass(i, 28) == 4) farN++; if (Pace.pass(i, 12) == 4) farSlow++; }
+        check("far road at highway speed", farN == 3 && farSlow == 0 && Pace.signMs(0, 28) < Pace.signMs(0, 12));
+        Scene sc = new Scene(); Track a1 = car(40, 30, 1, 0), noRange = car(41, Float.NaN, 0, 0), nearer = car(42, 12, -3, 0);
+        sc.feed(List.of(a1, noRange, nearer), 1000); List<Scene.Thing> th = sc.step(1000);
+        check("3d places only measured things, farN first", th.size() == 2 && th.get(0).id == 40);
+        a1.distance = 20; sc.feed(List.of(a1), 1200); th = sc.step(1200);
+        check("3d glides", th.get(0).z < 30 && th.get(0).z > 20);
+        for (int ms = 1400; ms <= 3000; ms += 100) th = sc.step(ms);
+        check("3d drops lost things", th.isEmpty());
+        Track ghost = car(43, 15, 0, 0); ghost.label = "person"; sc.feed(List.of(ghost), 3100);
+        check("3d hides unproven people", sc.step(3100).isEmpty());
+        float[] nearP = Scene.project(2, 5, 0, 1000, 600), away = Scene.project(2, 50, 0, 1000, 600);
+        check("3d perspective", nearP[0] > away[0] && nearP[1] > away[1] && away[0] > 500 && nearP[1] < 600);
+        LaneState laneX = new LaneState(); laneX.hasLeft = laneX.hasRight = true; laneX.la = 1.1f; laneX.lb = -1f; laneX.ra = -.1f; laneX.rb = 1f;
+        float top = laneX.drawTop(.55f);
+        check("lanes stop below where they meet", top > .6f && laneX.ra + laneX.rb * top > laneX.la + laneX.lb * top);
+        Tracker trkX = new Tracker(); List<Detection> d1 = List.of(new Detection("car", .6f, .50f, .50f, .53f, .53f));
+        trkX.update(d1, 0, null); List<Track> tr1 = trkX.update(List.of(new Detection("car", .6f, .525f, .50f, .555f, .53f)), 200, null);
+        check("small farN car followed", tr1.size() == 1 && tr1.get(0).hits == 2);
+        Advisor.Input pv = new Advisor.Input(); pv.speed = 28; pv.poorView = true;
+        check("no all clear when blind", Advisor.advise(pv).text.startsWith("Low camera"));
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

@@ -57,6 +57,7 @@ import com.zen.bmwdash.core.Advisor;
 import com.zen.bmwdash.core.Conditions;
 import com.zen.bmwdash.core.Geo;
 import com.zen.bmwdash.core.LaneState;
+import com.zen.bmwdash.core.Pace;
 import com.zen.bmwdash.core.MotionClassifier;
 import com.zen.bmwdash.core.SignReader;
 import com.zen.bmwdash.core.Predictor;
@@ -89,6 +90,13 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     private HorizontalScrollView routeScroll, buttonScroll;
     private SearchPanel searchPanel;
     private long showButtonsUntil;
+    private RoadView roadView;
+    private TextView view3dButton;
+    private int heat;
+    private android.os.PowerManager.OnThermalStatusChangedListener thermal;
+    private String adviceSeen = "", weatherSeen = "", trafficSeen = "";
+    private long adviceSince, weatherSince, trafficSince;
+    private ArRenderer.Guide guideNow;
     private TextView arButton;
     private SignalView signalView;
     private TextView trafficChip, weatherBanner, weatherButton, weatherSwitch, signChip;
@@ -211,6 +219,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         cameraPane.addView(preview, new FrameLayout.LayoutParams(-1, -1));
         overlay = new OverlayView(this);
         cameraPane.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+        roadView = new RoadView(this);
+        roadView.setVisibility(View.GONE);
+        cameraPane.addView(roadView, new FrameLayout.LayoutParams(-1, -1));
         cameraPane.setClipChildren(true);
 
         LinearLayout top = new LinearLayout(this);
@@ -290,6 +301,16 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         ws.gravity = Gravity.END;
         ws.topMargin = dp(6);
         top.addView(weatherSwitch, ws);
+        view3dButton = Ui.button(this, "", Ui.VIOLET, () -> {
+            prefs.edit().putBoolean("view3d", !prefs.view3d()).apply();
+            showButtonsUntil = SystemClock.elapsedRealtime() + 8000;
+            showViewMode();
+            refresh();
+        });
+        LinearLayout.LayoutParams v3 = new LinearLayout.LayoutParams(-2, -2);
+        v3.gravity = Gravity.END;
+        v3.topMargin = dp(6);
+        top.addView(view3dButton, v3);
         showWeatherLabel();
         showArLabel();
         FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
@@ -336,7 +357,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         bottom.addView(bs, blp);
         buttonScroll = bs;
         // while guiding, buttons tuck away; touching the camera picture brings them back
-        overlay.setOnClickListener(v -> { showButtonsUntil = SystemClock.elapsedRealtime() + 8000; refresh(); });
+        View.OnClickListener wake = v -> { showButtonsUntil = SystemClock.elapsedRealtime() + 8000; refresh(); };
+        overlay.setOnClickListener(wake);
+        roadView.setOnClickListener(wake);
         FrameLayout.LayoutParams botLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         botLp.setMargins(dp(8), 0, dp(8), dp(8));
         cameraPane.addView(bottom, botLp);
@@ -378,6 +401,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         setContentView(screen);
         arrange();
         showNightLabel();
+        showViewMode();
     }
 
     /** Cover screen and landscape: side by side. Unfolded square or portrait: stacked. */
@@ -588,6 +612,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         if (guess != null) { predicted = guess; predictedAt = seenAt; }
         // parked or crawling: floor tiles and kerbs look like lane paint, so hide lanes
         overlay.laneShift = prefs.laneShift();
+        if (prefs.view3d()) { roadView.mph = prefs.mph(); roadView.show(seen, l, speed, lanesOn() && !lanesUnsafe(l)); }
         overlay.show(seen, calibrating || (lanesOn() && l.confident && !lanesUnsafe(l)) ? l : null, w, h, speed, prefs.mph());
         visionChip.setText("◉ AI LIVE  " + fps + " fps  •  " + cars + (cars == 1 ? " vehicle" : " vehicles"));
         visionChip.setTextColor(Ui.CYAN);
@@ -630,8 +655,16 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         String how = !moving() ? "PARKED" : !lanesOn() ? "SLOW SPEED" : hidden ? "LANES NOT VISIBLE" : !laneKnown ? "SCANNING" : lane.position == LaneState.Position.CENTERED ? "CENTERED"
                 : lane.position == LaneState.Position.DRIFT_LEFT ? "DRIFT LEFT" : "DRIFT RIGHT";
         gauges.laneLabel = where.isEmpty() ? how : laneKnown && lane.position != LaneState.Position.CENTERED ? how : where;
+        // dark and wet, or blocked: finding nothing does not mean the road is empty
+        boolean poorView = !seeing || viewBlocked || (weatherKind() != Conditions.CLEAR && brightness < 90);
+        gauges.leadUnsure = poorView;
         gauges.invalidate();
         applyNight();
+        // without a fresh GPS fix we may well be moving, so never slow down on a guess
+        if (camera != null) camera.pace(fresh ? speed : 10, heat);
+        overlay.heat = heat;
+        map.maxFps(heat >= Pace.HOT ? 15 : heat >= Pace.WARM ? 20 : 30);
+        alarm.clean = prefs.cleanScreen();
 
         String name = road.name;
         if (name.isEmpty()) {
@@ -650,6 +683,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         in.lead = seeing ? lead : null;
         in.laneDeparture = laneKnown && lane.departing;
         in.laneType = type;
+        in.poorView = poorView;
         if (data.weather != null && prefs.weatherMode() != 1) in.weather = data.weather.hazard;
         in.incident = hazardAhead();
         int kind = weatherKind();
@@ -692,7 +726,10 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         if (event != null && event.code.equals("stopsign")) stopUntil = now + 3500;
         if (!seeing) light = 0;
         showSignal();
-        signChip.setVisibility(now < signUntil ? View.VISIBLE : View.GONE);
+        // the stop pill already says it, so the clean screen does not say it twice
+        boolean twice = prefs.cleanScreen() && now < stopUntil && signChip.getText().toString().endsWith("Stop sign");
+        signChip.setVisibility(now < signUntil && !twice ? View.VISIBLE : View.GONE);
+        if (prefs.view3d() && !calibrating) roadView.update(guideNow, seeing ? light : 0, speed, poorView, heat);
     }
 
     private void carCard(boolean seeing, boolean fresh) {
@@ -709,7 +746,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         String info = (lead.motion == Track.STOPPED ? "stopped" : Double.isNaN(theirSpeed) || !fresh ? "speed --" : "\u2248 " + Ui.speed(theirSpeed, prefs.mph()) + " " + Ui.unit(prefs.mph()))
                 + "   \u2022   " + Ui.range(lead.distance, prefs.mph())
                 + (speed > 3 ? String.format(Locale.US, "   \u2022   %.1f s gap", lead.distance / speed) : "");
-        carCard.setText("\uD83D\uDE98 " + name + "\n" + info);
+        boolean brief = prefs.cleanScreen() && speed > 3;
+        carCard.setText("\uD83D\uDE98 " + (!brief ? name + "\n" + info : (r != null ? name + "   \u2022   " : "") + info));
         carCard.setVisibility(View.VISIBLE);
     }
 
@@ -775,6 +813,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             if (prefs.voice()) say("Bridge ahead. Possible ice.");
         }
         if (now - bridgeSaidAt < 12_000) line(b, "\u2744 Bridge ahead: possible ice");
+        if (heat >= Pace.HOT) line(b, "\uD83C\uDF21 Phone hot: working slower, alerts may come later");
         if (kind != Conditions.CLEAR && kind != remindedKind && fresh && speed > 2) {
             remindedKind = kind;
             String tip = kind == Conditions.SNOW || kind == Conditions.ICE ? "Snow mode. Headlights on, and make sure all snow is cleared off the car."
@@ -782,7 +821,11 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             if (prefs.voice()) say(tip); else toast(tip);
         }
         weatherBanner.setText(b);
-        weatherBanner.setVisibility(b.length() == 0 ? View.GONE : View.VISIBLE);
+        String key = b.toString().replaceAll("[0-9.]+", "");
+        if (!key.equals(weatherSeen)) { weatherSeen = key; weatherSince = now; }
+        // problems that still apply stay up; news is read once and then cleared away
+        boolean stays = !prefs.cleanScreen() || speed <= .7 || blind || now - bridgeSaidAt < 12_000 || heat >= Pace.HOT;
+        weatherBanner.setVisibility(b.length() == 0 || !(stays || now - weatherSince < 8000) ? View.GONE : View.VISIBLE);
     }
 
     private static void line(StringBuilder b, String s) { if (b.length() > 0) b.append('\n'); b.append(s); }
@@ -811,7 +854,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         }
         if (text == null) { trafficChip.setVisibility(View.GONE); return; }
         trafficChip.setText("\uD83D\uDEA6 " + text);
-        trafficChip.setVisibility(View.VISIBLE);
+        long now = SystemClock.elapsedRealtime();
+        if (!key.equals(trafficSeen)) { trafficSeen = key; trafficSince = now; }
+        trafficChip.setVisibility(!prefs.cleanScreen() || speed <= .7 || now - trafficSince < 10_000 ? View.VISIBLE : View.GONE);
         if (spoken != null && speed > 3 && prefs.voice() && announced.add(key)) say(spoken);
     }
 
@@ -911,6 +956,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     private void show(int level, String text, String speak, boolean aloud, long now) {
         adviceBar.setText(text);
+        String key = level + text.replaceAll("[0-9.]+", "");
+        if (!key.equals(adviceSeen)) { adviceSeen = key; adviceSince = now; }
+        // clean screen: danger stays, other messages are shown briefly and then get out of the way
+        boolean showing = !prefs.cleanScreen() || level == Advisor.DANGER || speed <= .7 && level >= Advisor.WARN
+                || now - adviceSince < (level == Advisor.WARN ? 6000 : 4000);
+        adviceBar.setVisibility(showing ? View.VISIBLE : View.GONE);
         if (level != lastLevel) {
             int col = level == Advisor.DANGER ? Ui.RED : level == Advisor.WARN ? Ui.AMBER : level == Advisor.GOOD ? Ui.GREEN : Ui.BLUE;
             GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
@@ -1007,10 +1058,11 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             String arrow = s.direction < 0 ? "⬅ " : s.direction > 0 ? "➡ " : "⬆ ";
             // big arrow and distance, small street name: readable at a glance
             String big = arrow + Ui.distance(d, prefs.mph());
-            android.text.SpannableString card = new android.text.SpannableString(big + "\n" + s.text);
+            boolean brief = prefs.cleanScreen() && speed > 3;
+            android.text.SpannableString card = new android.text.SpannableString(big + (brief ? "   " : "\n") + s.text);
             card.setSpan(new android.text.style.RelativeSizeSpan(1.35f), 0, big.length(), 0);
             turnBar.setText(card);
-            turnBar.setMaxLines(3);
+            turnBar.setMaxLines(brief ? 2 : 3);
             map.nextTurn(Geo.slice(r.points, Math.max(0, s.along - 50), s.along + 40), d);
             turnBar.setVisibility(View.VISIBLE);
             in.turnDirection = s.direction; in.turnMeters = d;
@@ -1024,6 +1076,16 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         turnBar.setVisibility(View.GONE);
     }
 
+    /** 3D View on or off. The camera keeps seeing and recording either way. */
+    private void showViewMode() {
+        if (roadView == null) return;
+        boolean on = prefs.view3d() && !calibrating;
+        roadView.setVisibility(on ? View.VISIBLE : View.GONE);
+        overlay.setVisibility(on ? View.INVISIBLE : View.VISIBLE);
+        view3dButton.setText(prefs.view3d() ? "\u25C9 3D View ON" : "\u25CB 3D View OFF");
+        view3dButton.setAlpha(prefs.view3d() ? 1f : .75f);
+    }
+
     private void showArLabel() {
         boolean on = prefs.arRoute();
         arButton.setText(on ? "\u25C9 3D route ON" : "\u25CB 3D route OFF");
@@ -1032,6 +1094,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     private void showGuide(ArRenderer.Guide g) {
         arButton.setVisibility(g == null ? View.GONE : View.VISIBLE);
+        guideNow = prefs.arRoute() ? g : null;
+        if (g != null) g.compact = prefs.cleanScreen();
         overlay.guide(prefs.arRoute() ? g : null, camera == null ? .65f : camera.focal(), prefs.horizon(), prefs.center(), prefs.cameraHeight());
     }
 
@@ -1114,9 +1178,23 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         boolean nav = !routes.isEmpty();
         if (nav != navShown) { navShown = nav; weights(); map.navigation(nav); }
         boolean calm = nav && speed > 3 && !calibrating;
-        buttonScroll.setVisibility(!calm || SystemClock.elapsedRealtime() < showButtonsUntil ? View.VISIBLE : View.GONE);
+        boolean asked = SystemClock.elapsedRealtime() < showButtonsUntil;
+        boolean tucked = prefs.cleanScreen() && speed > 3 && !calibrating && !asked;
+        buttonScroll.setVisibility((!calm && !tucked) || asked ? View.VISIBLE : View.GONE);
         routeScroll.setVisibility(calm ? View.GONE : View.VISIBLE);
-        visionChip.setVisibility(calm ? View.GONE : View.VISIBLE);
+        visionChip.setVisibility(calm || prefs.cleanScreen() && speed > 3 ? View.GONE : View.VISIBLE);
+        if (tucked) arButton.setVisibility(View.GONE);
+        // the switches come back with a tap on the picture
+        weatherSwitch.setVisibility(tucked ? View.GONE : View.VISIBLE);
+        view3dButton.setVisibility(tucked ? View.GONE : View.VISIBLE);
+        signalSize();
+    }
+
+    private void signalSize() {
+        boolean clean = prefs.cleanScreen();
+        android.view.ViewGroup.LayoutParams lp = signalView.getLayoutParams();
+        int wide = dp(clean ? 158 : 210), tall = dp(clean ? 36 : 48);
+        if (lp.width != wide || lp.height != tall) { lp.width = wide; lp.height = tall; signalView.setLayoutParams(lp); }
     }
 
     /** The camera gets most of the screen; the Map button picks small, large or hidden. */
@@ -1154,6 +1232,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     private void calibrate(boolean on) {
         calibrating = on;
+        showViewMode();
         if (calibrationPanel != null) { cameraPane.removeView(calibrationPanel); calibrationPanel = null; }
         overlay.calibration(on, prefs.horizon(), prefs.center(), prefs.hood());
         if (!on) return;
@@ -1219,6 +1298,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         contact.setInputType(InputType.TYPE_CLASS_PHONE);
         contact.setText(prefs.sosNumber());
         p.addView(contact);
+        CheckBox view3d = check(p, "3D View instead of the camera picture", prefs.view3d());
+        CheckBox clean = check(p, "Clean screen: small alerts, messages fade, buttons hide while moving (tap the picture to show them)", prefs.cleanScreen());
         CheckBox mph = check(p, "Miles per hour", prefs.mph());
         CheckBox voice = check(p, "Spoken alerts and directions", prefs.voice());
         CheckBox auto = check(p, "Start recording when the app opens", prefs.autoRecord());
@@ -1235,6 +1316,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         new AlertDialog.Builder(this).setTitle("Setup").setView(s).setPositiveButton("Save", (d, w) -> {
             int g = 8;
             try { g = Math.max(1, Math.min(200, Integer.parseInt(gb.getText().toString().trim()))); } catch (NumberFormatException ignored) { }
+            prefs.edit().putBoolean("view3d", view3d.isChecked()).putBoolean("clean", clean.isChecked()).apply();
+            showViewMode();
             prefs.edit().putString("tomtom", key.getText().toString().trim()).putBoolean("mph", mph.isChecked())
                     .putBoolean("voice", voice.isChecked()).putBoolean("autorec", auto.isChecked())
                     .putBoolean("dark", dark.isChecked()).putBoolean("radar", radar.isChecked()).putInt("gb", g)
@@ -1294,6 +1377,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         super.onResume();
         resumed = true;
         map.view.onResume();
+        android.os.PowerManager power = getSystemService(android.os.PowerManager.class);
+        if (power != null) {
+            heat = power.getCurrentThermalStatus();
+            thermal = status -> { heat = status; refresh(); };
+            power.addThermalStatusListener(getMainExecutor(), thermal);
+        }
         if (started && granted(Manifest.permission.CAMERA)) { if (cameraStarted) camera.resume(); else startCamera(); }
         startLocation();
         Sensor a = sensors.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
@@ -1306,6 +1395,9 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         sensors.unregisterListener(this);
         locations.removeUpdates(this);
         locationOn = false;
+        android.os.PowerManager power = getSystemService(android.os.PowerManager.class);
+        if (power != null && thermal != null) power.removeThermalStatusListener(thermal);
+        thermal = null;
         if (camera != null) camera.pause();
         map.view.onPause();
         super.onPause();
