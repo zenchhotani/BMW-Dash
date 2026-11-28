@@ -56,7 +56,7 @@ public final class Tracker {
         selectLead();
         List<Track> out = new ArrayList<>();
         for (Track tr : tracks)
-            if (RoadUserFilter.strict(tr.label) ? tr.confirmed : tr.hits >= 2) out.add(copy(tr));
+            if (tr.hits >= 2) out.add(copy(tr));
         return out;
     }
 
@@ -91,8 +91,9 @@ public final class Tracker {
         tr.score = d.score; tr.label = d.label; tr.lastSeen = t; tr.hits++;
         if (!d.lamps) tr.lamps = false;
         tr.scoreSum += d.score; tr.poor = poor;
+        if (d.doubtful) tr.doubts++;
         if (!tr.confirmed && RoadUserFilter.strict(tr.label))
-            tr.confirmed = tr.hits >= 4 && t - tr.firstSeen >= 700
+            tr.confirmed = tr.hits >= 4 && t - tr.firstSeen >= 700 && tr.doubts * 3 <= tr.hits
                     && tr.scoreSum / tr.hits >= RoadUserFilter.minScore(tr.label, tr.poor);
         float sec = (t - tr.firstSeen) / 1000f;
         // growth comes from the raw box, never the smoothed one, which lags; boxes cut by the frame are left out

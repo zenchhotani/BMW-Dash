@@ -139,6 +139,8 @@ final class OverlayView extends View {
             double gap = ego > 3 && !Float.isNaN(t.distance) ? t.distance / ego : 99;
             color = gap < 1.2 ? Ui.RED : gap < 2 ? Ui.AMBER : Ui.GREEN;
         }
+        // seen but not yet proven: shown softly, no warning comes from it
+        if (com.zen.bmwdash.core.RoadUserFilter.strict(t.label) && !t.confirmed) color = 0xFF8C97B0;
         if (t.motion == Track.PARKED) {
             if (clean) return;
             p.setShader(null); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.2f * d); p.setColor(0x99AAB4C8);

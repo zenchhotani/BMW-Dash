@@ -371,7 +371,7 @@ final class CameraEngine {
             final boolean dark = enhance;
             List<float[]> blocked = new ArrayList<>();
             for (Track k : recent)
-                if (k.isVehicle() || k.label.equals("person")) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
+                if (k.isVehicle() || k.label.equals("person") && k.confirmed) blocked.add(new float[]{k.left, k.top, k.right, k.bottom - 0.01f});
             laneDetector.ignore = blocked;
             java.util.concurrent.Future<Pixels> side = pixelPool.submit(() -> pixels(whole, dark, horizon, hood, center));
 
@@ -401,11 +401,10 @@ final class CameraEngine {
 
             // people and animals must look right and not be a patch of glare
             boolean dim = dark || brightness < 90;
-            for (java.util.Iterator<Detection> it = dets.iterator(); it.hasNext(); ) {
-                Detection d = it.next();
+            // they are still shown, as before; a doubtful one only never raises a warning
+            for (Detection d : dets)
                 if (RoadUserFilter.strict(d.label) && (!RoadUserFilter.plausible(d, horizon, h / (float) w, dim)
-                        || RoadUserFilter.glare(px, lw, lh, d))) it.remove();
-            }
+                        || RoadUserFilter.glare(px, lw, lh, d))) d.doubtful = true;
             tracker.poor = dim;
             // at night a car ahead is often only two red lamps: add those the model missed
             if (brightness < 70) {
@@ -448,7 +447,7 @@ final class CameraEngine {
             }
             if (lampColors.size() > 200) lampColors.clear();
             List<float[]> road = new ArrayList<>();
-            for (Track k : tracks) if (k.isVehicle() || k.label.equals("person")) road.add(new float[]{k.left, k.top, k.right, k.bottom});
+            for (Track k : tracks) if (k.isVehicle() || k.label.equals("person") && k.confirmed) road.add(new float[]{k.left, k.top, k.right, k.bottom});
             LampFinder.Lamp lamp = lampFinder.find(px, lw, lh, horizon, center, road);
             if (lamp != null && lamp.confirmed) {
                 boolean inOurs = ours != null && lamp.cx >= ours.left - 0.02f && lamp.cx <= ours.right + 0.02f

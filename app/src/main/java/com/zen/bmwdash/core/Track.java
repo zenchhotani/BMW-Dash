@@ -17,6 +17,8 @@ public final class Track {
     /** people, animals and objects: seen long and surely enough to show and warn about */
     public boolean confirmed;
     float scoreSum;
+    /** looks that seemed wrong for what it claims to be */
+    int doubts;
     /** set when the picture is dark, which calls for more proof */
     boolean poor;
     /** lit colour for traffic lights, see SignalColor */

@@ -115,9 +115,17 @@ public class CoreTest {
         check("headlight is glare", RoadUserFilter.glare(night, 100, 100, walker));
         Tracker blink = new Tracker();
         blink.update(List.of(walker), 0, null); List<Track> two = blink.update(List.of(walker), 250, null);
-        check("brief person hidden", two.isEmpty());
+        check("brief person shown but not trusted", two.size() == 1 && !two.get(0).confirmed);
         blink.update(List.of(walker), 500, null); List<Track> held = blink.update(List.of(walker), 750, null);
         check("steady person shown", held.size() == 1 && held.get(0).confirmed);
+        Detection odd = new Detection("chair", .8f, .4f, .5f, .5f, .7f); odd.doubtful = true;
+        Tracker doubt = new Tracker(); List<Track> seenOdd = null;
+        for (int i = 0; i < 8; i++) seenOdd = doubt.update(List.of(odd), i * 250L, null);
+        check("doubtful chair is shown but never trusted", seenOdd.size() == 1 && !seenOdd.get(0).confirmed);
+        Detection real = new Detection("chair", .8f, .4f, .5f, .5f, .7f);
+        Tracker good = new Tracker(); List<Track> seenReal = null;
+        for (int i = 0; i < 8; i++) seenReal = good.update(List.of(real), i * 250L, null);
+        check("clear chair is trusted", seenReal.size() == 1 && seenReal.get(0).confirmed);
         int R = 0xFFFF2010, G = 0xFF20F0C0, Y = 0xFFFFC020;
         check("red lamp", SignalColor.classify(lamp(R, 6), 20, 50) == SignalColor.RED);
         check("green lamp", SignalColor.classify(lamp(G, 40), 20, 50) == SignalColor.GREEN);
