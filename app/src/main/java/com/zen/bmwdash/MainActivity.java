@@ -288,8 +288,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         top.addView(signalView, sv);
         // always reachable while a route is active, even when the other buttons are tucked away
         arButton = Ui.button(this, "", Ui.CYAN, () -> {
-            if (!prefs.extrasChosen()) { toast("Route on the camera is an Extra: turn Extras on"); return; }
-            prefs.edit().putBoolean("arroute", !prefs.arRouteChosen()).apply();
+            prefs.edit().putBoolean("x_route", !prefs.chosen("x_route")).apply();
             showArLabel();
             refresh();
         });
@@ -308,8 +307,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         ws.topMargin = dp(6);
         top.addView(weatherSwitch, ws);
         view3dButton = Ui.button(this, "", Ui.VIOLET, () -> {
-            if (!prefs.extrasChosen()) { toast("3D view is an Extra: turn Extras on"); return; }
-            prefs.edit().putBoolean("view3d", !prefs.view3dChosen()).apply();
+            prefs.edit().putBoolean("x_3d", !prefs.chosen("x_3d")).apply();
             showButtonsUntil = SystemClock.elapsedRealtime() + 8000;
             showViewMode();
             refresh();
@@ -336,23 +334,14 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         buttons.addView(Ui.button(this, "🔍 Go to", Ui.CYAN, this::openSearch), margins(-2, -2, 6));
         trafficButton = Ui.button(this, "🚦 Traffic", Ui.GREEN, () -> {
             if (prefs.tomtomKey().isEmpty()) { toast("Add your free TomTom key in Setup"); settingsDialog(); return; }
-            if (!prefs.extrasChosen()) { toast("Traffic colours are an Extra: turn Extras on"); return; }
-            prefs.edit().putBoolean("traffic", !prefs.trafficChosen()).apply();
+            prefs.edit().putBoolean("x_traffic", !prefs.chosen("x_traffic")).apply();
             map.loadStyle();
-            toast(prefs.trafficChosen() ? "Traffic layer on" : "Traffic layer off");
+            toast(prefs.chosen("x_traffic") ? "Traffic layer on" : "Traffic layer off");
         });
         buttons.addView(trafficButton, margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "⌖ Aim", Ui.VIOLET, () -> calibrate(!calibrating)), margins(-2, -2, 6));
         buttons.addView(Ui.button(this, "⚙ Setup", Ui.BLUE, this::settingsDialog), margins(-2, -2, 6));
-        extrasButton = Ui.button(this, "", Ui.GREEN, () -> {
-            boolean on = !prefs.extrasChosen();
-            prefs.edit().putBoolean("extras", on).apply();
-            Prefs.paused = false;
-            showExtrasLabel(); showViewMode(); map.loadStyle();
-            toast(on ? "Extras on: car name, prediction, 3D, route on camera, weather outlook, radar, traffic colours"
-                    : "Extras off: the road check has the phone to itself");
-            refresh();
-        });
+        extrasButton = Ui.button(this, "", Ui.GREEN, this::extrasDialog);
         buttons.addView(extrasButton, margins(-2, -2, 6));
         showExtrasLabel();
         nightButton = Ui.button(this, "\uD83C\uDF19 Auto", Ui.VIOLET, this::cycleNight);
@@ -603,7 +592,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     }
 
     /** naming the car ahead is an extra: it waits while the phone is hot */
-    @Override public boolean wantsCar(int id, int widthPx) { return prefs.extras() && heat < Pace.HOT && carId.wants(id, widthPx); }
+    @Override public boolean wantsCar(int id, int widthPx) { return prefs.carName() && heat < Pace.HOT && carId.wants(id, widthPx); }
 
     @Override public void onCarPicture(int id, Bitmap crop, int widthPx) {
         carId.identify(id, crop, widthPx, (car, r) -> {
@@ -631,7 +620,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         overlay.calibration(calibrating, prefs.horizon(), prefs.center(), prefs.hood());
         long seenAt = SystemClock.elapsedRealtime();
         // guessing what the next car will do is an extra: the road check never waits for it
-        if (prefs.extras()) {
+        if (prefs.predict()) {
             Safety.Event guess = predictor.update(seenAt, speed, seen);
             if (guess != null) { predicted = guess; predictedAt = seenAt; }
         } else predicted = null;
@@ -704,7 +693,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         }
         overlay.heat = heat;
         // the map shares the phone's graphics chip with the detector: it draws less often unless Extras are on
-        map.maxFps(heat >= Pace.HOT || Prefs.paused ? 6 : prefs.extrasChosen() ? 15 : 10);
+        map.maxFps(heat >= Pace.HOT || Prefs.paused ? 6 : prefs.anyExtra() ? 15 : 10);
         alarm.clean = prefs.cleanScreen();
 
         String name = road.name;
@@ -784,7 +773,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             theirSpeed = Double.isNaN(theirSpeed) ? v : theirSpeed + 0.2 * (v - theirSpeed);
         }
         CarId.Result r = carId.get(lead.id);
-        String name = r != null ? r.label() : !prefs.extras() ? "Car ahead" : prefs.aiKey().isEmpty() ? "Car ahead (add AI key for make and model)"
+        String name = r != null ? r.label() : !prefs.carName() ? "Car ahead" : prefs.aiKey().isEmpty() ? "Car ahead (add AI key for make and model)"
                 : !carId.problem.isEmpty() ? "Car ahead (" + carId.problem + ")" : "Identifying car ahead\u2026";
         if (r != null && r.emergency.equals("police")) name = "\uD83D\uDE93 Police  \u2022  " + name;
         String info = (lead.motion == Track.STOPPED ? "stopped" : Double.isNaN(theirSpeed) || !fresh ? "speed --" : "\u2248 " + Ui.speed(theirSpeed, prefs.mph()) + " " + Ui.unit(prefs.mph()))
@@ -841,7 +830,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             line(b, "\u26A0 " + a.event + (data.alerts.size() > 1 ? "  (+" + (data.alerts.size() - 1) + " more)" : ""));
             if (prefs.voice() && announced.add("nws" + a.event)) say("National Weather Service alert: " + a.event);
         }
-        if (on && prefs.extras() && !data.outlook.isEmpty()) {
+        if (on && prefs.outlook() && !data.outlook.isEmpty()) {
             line(b, "\u27A1 " + data.outlook);
             if (prefs.voice() && speed > 3 && announced.add("out" + data.outlook.split(" in ")[0])) say(data.outlook);
         }
@@ -850,7 +839,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
             line(b, "\uD83D\uDEAB Camera view unclear: check the glass, do not rely on camera alerts");
             if (now - viewSaidAt > 300_000) { viewSaidAt = now; if (prefs.voice()) say("Camera view unclear. Check the windshield."); }
         }
-        if (prefs.extras() && ice && fresh && speed > 5 && headingValid && now - bridgeSaidAt > 60_000
+        if (prefs.outlook() && ice && fresh && speed > 5 && headingValid && now - bridgeSaidAt > 60_000
                 && data.bridgeAhead(last.getLatitude(), last.getLongitude(), heading)) {
             bridgeSaidAt = now;
             toast("Bridge ahead: possible ice");
@@ -1130,11 +1119,32 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         view3dButton.setAlpha(prefs.view3d() ? 1f : .75f);
     }
 
+    private static final String[] EXTRA_NAMES = {
+            "Car make and model (needs an AI key)", "Driver prediction: warns a car may move into your lane",
+            "3D view instead of the camera picture", "Route drawn on the camera", "Weather outlook and bridge-ice alerts",
+            "Rain and snow radar on the map (US)", "Traffic colours on the map (needs a TomTom key)"};
+
+    /** each extra is its own switch; all are off until chosen, and they pause by themselves if the phone falls behind */
+    private void extrasDialog() {
+        boolean[] on = new boolean[Prefs.KEYS.length];
+        for (int i = 0; i < on.length; i++) on[i] = prefs.chosen(Prefs.KEYS[i]);
+        new AlertDialog.Builder(this).setTitle("Extras (off keeps the road check fastest)")
+                .setMultiChoiceItems(EXTRA_NAMES, on, (d, i, checked) -> on[i] = checked)
+                .setPositiveButton("Apply", (d, w) -> {
+                    android.content.SharedPreferences.Editor e = prefs.edit();
+                    for (int i = 0; i < on.length; i++) e.putBoolean(Prefs.KEYS[i], on[i]);
+                    e.apply();
+                    Prefs.paused = false;
+                    showExtrasLabel(); showViewMode(); showArLabel(); map.loadStyle(); refresh();
+                }).setNegativeButton("Cancel", null).show();
+    }
+
     private void showExtrasLabel() {
         if (extrasButton == null) return;
-        boolean chosen = prefs.extrasChosen();
-        extrasButton.setText(!chosen ? "\u2726 Extras OFF" : Prefs.paused ? "\u2726 Extras paused" : "\u2726 Extras ON");
-        extrasButton.setAlpha(chosen && !Prefs.paused ? 1f : .75f);
+        int n = 0;
+        for (String k : Prefs.KEYS) if (prefs.chosen(k)) n++;
+        extrasButton.setText(n == 0 ? "\u2726 Extras" : Prefs.paused ? "\u2726 Extras paused" : "\u2726 Extras " + n);
+        extrasButton.setAlpha(n > 0 && !Prefs.paused ? 1f : .75f);
     }
 
     private void showArLabel() {
@@ -1350,15 +1360,12 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         contact.setInputType(InputType.TYPE_CLASS_PHONE);
         contact.setText(prefs.sosNumber());
         p.addView(contact);
-        CheckBox extras = check(p, "Extras: car make and model, driver prediction, 3D view, route on the camera, weather outlook, radar and traffic colours. Leave off for the fastest, most reliable road check. They pause on their own if the phone falls behind.", prefs.extrasChosen());
-        CheckBox view3d = check(p, "3D View instead of the camera picture (needs Extras)", prefs.view3dChosen());
         CheckBox clean = check(p, "Clean screen: small alerts, messages fade, buttons hide while moving (tap the picture to show them)", prefs.cleanScreen());
         CheckBox sharp = check(p, "Sharper night picture (experimental, applies after restarting the app; can slow the preview)", prefs.sharpCamera());
         CheckBox mph = check(p, "Miles per hour", prefs.mph());
         CheckBox voice = check(p, "Spoken alerts and directions", prefs.voice());
         CheckBox auto = check(p, "Start recording when the app opens", prefs.autoRecord());
         CheckBox dark = check(p, "Dark map", prefs.mapDark());
-        CheckBox radar = check(p, "Rain and snow radar on map, US (needs Extras)", prefs.radarChosen());
         p.addView(Ui.text(this, "Loop recording storage in GB (locked clips are kept)", 12, Ui.DIM, false));
         EditText gb = new EditText(this);
         gb.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -1370,12 +1377,11 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         new AlertDialog.Builder(this).setTitle("Setup").setView(s).setPositiveButton("Save", (d, w) -> {
             int g = 8;
             try { g = Math.max(1, Math.min(200, Integer.parseInt(gb.getText().toString().trim()))); } catch (NumberFormatException ignored) { }
-            prefs.edit().putBoolean("extras", extras.isChecked()).putBoolean("view3d", view3d.isChecked()).putBoolean("clean", clean.isChecked()).putBoolean("sharpcam", sharp.isChecked()).apply();
-            Prefs.paused = false;
+            prefs.edit().putBoolean("clean", clean.isChecked()).putBoolean("sharpcam", sharp.isChecked()).apply();
             showViewMode(); showExtrasLabel();
             prefs.edit().putString("tomtom", key.getText().toString().trim()).putBoolean("mph", mph.isChecked())
                     .putBoolean("voice", voice.isChecked()).putBoolean("autorec", auto.isChecked())
-                    .putBoolean("dark", dark.isChecked()).putBoolean("radar", radar.isChecked()).putInt("gb", g)
+                    .putBoolean("dark", dark.isChecked()).putInt("gb", g)
                     .putString("aikey", ai.getText().toString().trim()).putString("sos", contact.getText().toString().trim()).apply();
             carId.reset();
             data.refreshNow();
