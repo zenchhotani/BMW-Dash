@@ -92,9 +92,14 @@ public final class Tracker {
         if (!d.lamps) tr.lamps = false;
         tr.scoreSum += d.score; tr.poor = poor;
         if (d.doubtful) tr.doubts++;
-        if (!tr.confirmed && RoadUserFilter.strict(tr.label))
-            tr.confirmed = tr.hits >= 4 && t - tr.firstSeen >= 700 && tr.doubts * 3 <= tr.hits
-                    && tr.scoreSum / tr.hits >= RoadUserFilter.minScore(tr.label, tr.poor);
+        if (!tr.confirmed && RoadUserFilter.strict(tr.label)) {
+            // a clear, confident look is trusted at once; an unsure one needs a few more looks
+            float avg = tr.scoreSum / tr.hits, need = RoadUserFilter.minScore(tr.label, tr.poor);
+            long age = t - tr.firstSeen;
+            boolean strong = tr.doubts == 0 && tr.hits >= 2 && age >= 200 && avg >= need + 0.12f;
+            boolean steady = tr.doubts * 3 <= tr.hits && tr.hits >= 3 && age >= 350 && avg >= need;
+            tr.confirmed = strong || steady;
+        }
         float sec = (t - tr.firstSeen) / 1000f;
         // growth comes from the raw box, never the smoothed one, which lags; boxes cut by the frame are left out
         float h = d.bottom - d.top;

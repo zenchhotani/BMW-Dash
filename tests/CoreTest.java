@@ -115,7 +115,12 @@ public class CoreTest {
         check("headlight is glare", RoadUserFilter.glare(night, 100, 100, walker));
         Tracker blink = new Tracker();
         blink.update(List.of(walker), 0, null); List<Track> two = blink.update(List.of(walker), 250, null);
-        check("brief person shown but not trusted", two.size() == 1 && !two.get(0).confirmed);
+        check("clear person trusted on the second look", two.size() == 1 && two.get(0).confirmed);
+        Detection faint = new Detection("person", .52f, .48f, .45f, .53f, .70f);
+        Tracker unsure = new Tracker(); unsure.update(List.of(faint), 0, null);
+        List<Track> faint2 = unsure.update(List.of(faint), 250, null);
+        check("unsure person shown but not trusted yet", faint2.size() == 1 && !faint2.get(0).confirmed);
+        check("unsure person trusted after a few looks", unsure.update(List.of(faint), 500, null).get(0).confirmed);
         blink.update(List.of(walker), 500, null); List<Track> held = blink.update(List.of(walker), 750, null);
         check("steady person shown", held.size() == 1 && held.get(0).confirmed);
         Detection odd = new Detection("chair", .8f, .4f, .5f, .5f, .7f); odd.doubtful = true;
