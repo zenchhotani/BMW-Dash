@@ -129,7 +129,7 @@ final class RoadData {
         } else { flow = freeFlow = aheadFlow = Double.NaN; incidents = new ArrayList<>(); jams = new ArrayList<>(); }
         if (now - alertTime > 300_000) { alertTime = now; userPool.execute(() -> fetchAlerts(lat, lon)); }
         double[][] route = path;
-        if (route == null) { outlook = ""; outlookRoute = null; }
+        if (route == null || !prefs.extras()) { outlook = ""; outlookRoute = null; }
         else if (route != outlookRoute || now - outlookTime > 900_000) {
             if (route != outlookRoute) outlook = "";
             outlookRoute = route; outlookTime = now;

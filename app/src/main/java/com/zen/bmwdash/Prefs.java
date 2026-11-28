@@ -12,7 +12,14 @@ final class Prefs {
     boolean voice() { return p.getBoolean("voice", true); }
     boolean autoRecord() { return p.getBoolean("autorec", true); }
     boolean mapDark() { return p.getBoolean("dark", true); }
-    boolean mapTraffic() { return p.getBoolean("traffic", true); }
+    /** the traffic colours on the map; an extra, so they only show while Extras are on */
+    boolean mapTraffic() { return extras() && trafficChosen(); }
+    boolean trafficChosen() { return p.getBoolean("traffic", true); }
+    /** set while the road check is far behind: the extras step aside until it recovers */
+    static volatile boolean paused;
+    /** Extras: car make and model, driver prediction, 3D view, route on the camera, weather outlook, radar, traffic colours. Off keeps the road check fastest. */
+    boolean extras() { return extrasChosen() && !paused; }
+    boolean extrasChosen() { return p.getBoolean("extras", false); }
     /** fraction of frame height */
     float horizon() { return p.getFloat("horizon", 0.50f); }
     float center() { return p.getFloat("center", 0.50f); }
@@ -26,7 +33,8 @@ final class Prefs {
     int weatherMode() { return p.getInt("wxmode", 0); }
     /** sideways correction of the drawn lane, fraction of frame width */
     float laneShift() { return p.getFloat("laneshift", 0f); }
-    boolean radar() { return p.getBoolean("radar", true); }
+    boolean radar() { return extras() && radarChosen(); }
+    boolean radarChosen() { return p.getBoolean("radar", true); }
     String reports() { return p.getString("reports", ""); }
     String home() { return p.getString("home", ""); }
     String work() { return p.getString("work", ""); }
@@ -34,12 +42,14 @@ final class Prefs {
     /** 0 small, 1 large, 2 hidden */
     int mapSize() { return p.getInt("mapsize", 0); }
     /** drawn 3D scene instead of the camera picture */
-    boolean view3d() { return p.getBoolean("view3d", false); }
+    boolean view3d() { return extras() && view3dChosen(); }
+    boolean view3dChosen() { return p.getBoolean("view3d", false); }
     /** keep the picture uncovered: small alerts, messages that fade, controls tucked away while moving */
     boolean cleanScreen() { return p.getBoolean("clean", true); }
     /** extra camera tuning for night (fixed focus, 30 fps exposure cap, crisp edges): off unless asked, it can slow the preview */
     boolean sharpCamera() { return p.getBoolean("sharpcam", false); }
-    boolean arRoute() { return p.getBoolean("arroute", true); }
+    boolean arRoute() { return extras() && arRouteChosen(); }
+    boolean arRouteChosen() { return p.getBoolean("arroute", true); }
     int storageGb() { return p.getInt("gb", 8); }
 
     SharedPreferences.Editor edit() { return p.edit(); }

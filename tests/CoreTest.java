@@ -308,6 +308,18 @@ public class CoreTest {
         check("small farN car followed", tr1.size() == 1 && tr1.get(0).hits == 2);
         Advisor.Input pv = new Advisor.Input(); pv.speed = 28; pv.poorView = true;
         check("no all clear when blind", Advisor.advise(pv).text.startsWith("Low camera"));
+        check("health ok when driving on pace", Load.health(120, 90, 100, true) == Load.OK);
+        check("health slipping", Load.health(250, 90, 100, true) == Load.SLIPPING);
+        check("health behind", Load.health(450, 90, 100, true) == Load.BEHIND);
+        check("health stalled check is behind", Load.health(100, 90, 900, true) == Load.BEHIND);
+        check("parked is never judged", Load.health(900, 300, 5000, false) == Load.OK);
+        Load ld = new Load();
+        check("a short stumble keeps the extras", !ld.update(0, Load.BEHIND) && !ld.update(2000, Load.BEHIND) && !ld.update(2500, Load.OK));
+        ld = new Load(); ld.update(0, Load.BEHIND);
+        check("far behind 3 s pauses extras", ld.update(3000, Load.BEHIND) && ld.paused());
+        check("slipping does not bring them back", ld.update(4000, Load.SLIPPING) && ld.update(20000, Load.SLIPPING));
+        ld.update(21000, Load.OK);
+        check("not back until healthy a good while", ld.update(25000, Load.OK) && !ld.update(29000, Load.OK));
         System.out.println(fails + " failures"); System.exit(fails == 0 ? 0 : 1);
     }
 }

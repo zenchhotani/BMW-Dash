@@ -133,7 +133,7 @@ final class CameraEngine {
     private final LampFinder lampFinder = new LampFinder();
     private final ExecutorService pixelPool = Executors.newSingleThreadExecutor();
     private volatile int cycleMs, gapMs;
-    private long lastCycleAt;
+    private volatile long lastCycleAt;
     private final SignalPicker signalPicker = new SignalPicker();
     private final SignReader signReader = new SignReader();
     private com.google.mlkit.vision.text.TextRecognizer reader;
@@ -278,6 +278,13 @@ final class CameraEngine {
 
     /** which chip runs detection and how long one look takes */
     String engine() { return engine + " " + inferMs + " ms  \u2022  look " + cycleMs + " ms, every " + gapMs + " ms"; }
+
+    /** 0 keeping up, 1 slipping, 2 far behind; judged only while driving */
+    int health() {
+        long last = lastCycleAt;
+        return com.zen.bmwdash.core.Load.health(gapMs, Pace.detectMs(heat, egoSpeed, 0),
+                last <= 0 ? 0 : SystemClock.elapsedRealtime() - last, egoSpeed > 1);
+    }
 
     /** focal length over upright frame width, as used for distances */
     float focal() { return tracker.focal; }
