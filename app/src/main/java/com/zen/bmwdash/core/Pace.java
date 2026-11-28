@@ -22,7 +22,7 @@ public final class Pace {
 
     /** shortest time between two sign readings, ms; reading text is costly, so it is the first to give way */
     public static long signMs(int heat, double speed) {
-        long base = speed < 1 ? 2500 : speed > HIGHWAY ? 1100 : 550;
+        long base = speed < 1 ? 2500 : speed > HIGHWAY ? 1100 : 600;
         return heat >= HOT ? base * 3 : heat >= WARM ? base * 3 / 2 : base;
     }
 

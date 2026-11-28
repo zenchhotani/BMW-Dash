@@ -1316,6 +1316,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         p.addView(contact);
         CheckBox view3d = check(p, "3D View instead of the camera picture", prefs.view3d());
         CheckBox clean = check(p, "Clean screen: small alerts, messages fade, buttons hide while moving (tap the picture to show them)", prefs.cleanScreen());
+        CheckBox sharp = check(p, "Sharper night picture (experimental, applies after restarting the app; can slow the preview)", prefs.sharpCamera());
         CheckBox mph = check(p, "Miles per hour", prefs.mph());
         CheckBox voice = check(p, "Spoken alerts and directions", prefs.voice());
         CheckBox auto = check(p, "Start recording when the app opens", prefs.autoRecord());
@@ -1332,7 +1333,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         new AlertDialog.Builder(this).setTitle("Setup").setView(s).setPositiveButton("Save", (d, w) -> {
             int g = 8;
             try { g = Math.max(1, Math.min(200, Integer.parseInt(gb.getText().toString().trim()))); } catch (NumberFormatException ignored) { }
-            prefs.edit().putBoolean("view3d", view3d.isChecked()).putBoolean("clean", clean.isChecked()).apply();
+            prefs.edit().putBoolean("view3d", view3d.isChecked()).putBoolean("clean", clean.isChecked()).putBoolean("sharpcam", sharp.isChecked()).apply();
             showViewMode();
             prefs.edit().putString("tomtom", key.getText().toString().trim()).putBoolean("mph", mph.isChecked())
                     .putBoolean("voice", voice.isChecked()).putBoolean("autorec", auto.isChecked())

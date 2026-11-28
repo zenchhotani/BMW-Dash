@@ -37,6 +37,8 @@ final class Prefs {
     boolean view3d() { return p.getBoolean("view3d", false); }
     /** keep the picture uncovered: small alerts, messages that fade, controls tucked away while moving */
     boolean cleanScreen() { return p.getBoolean("clean", true); }
+    /** extra camera tuning for night (fixed focus, 30 fps exposure cap, crisp edges): off unless asked, it can slow the preview */
+    boolean sharpCamera() { return p.getBoolean("sharpcam", false); }
     boolean arRoute() { return p.getBoolean("arroute", true); }
     int storageGb() { return p.getInt("gb", 8); }
 

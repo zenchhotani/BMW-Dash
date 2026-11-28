@@ -206,6 +206,7 @@ final class CameraEngine {
      * exposure at 1/30 s so night does not smear, and ask for crisp edges and light noise smoothing.
      */
     private <T> void sharp(androidx.camera.core.ExtendableBuilder<T> b) {
+        if (!prefs.sharpCamera()) return;
         androidx.camera.camera2.interop.Camera2Interop.Extender<T> e = new androidx.camera.camera2.interop.Camera2Interop.Extender<>(b);
         if (steadyFps != null) e.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, steadyFps);
         if (sharpEdges) e.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY);
