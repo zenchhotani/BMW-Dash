@@ -305,11 +305,43 @@ final class CameraEngine {
         return out;
     }
 
+    private final Bitmap[] carBuf = new Bitmap[2];
+    private int carIdx;
+    private long carAt;
+    private final android.graphics.Paint carPaint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+
+    /** a small, upright copy of the camera picture for the car screen, only while that screen is up */
+    private void shareWithCar(ImageProxy image, long now) {
+        carAt = now;
+        Bitmap raw = null;
+        try {
+            raw = image.toBitmap();
+            int deg = image.getImageInfo().getRotationDegrees();
+            boolean turned = deg % 180 != 0;
+            int rw = turned ? raw.getHeight() : raw.getWidth(), rh = turned ? raw.getWidth() : raw.getHeight();
+            int tw = 640, th = Math.max(1, rh * tw / rw);
+            carIdx = 1 - carIdx;
+            Bitmap dst = carBuf[carIdx];
+            if (dst == null || dst.getWidth() != tw || dst.getHeight() != th) dst = carBuf[carIdx] = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888);
+            Matrix m = new Matrix();
+            m.postRotate(deg, raw.getWidth() / 2f, raw.getHeight() / 2f);
+            m.postTranslate((rw - raw.getWidth()) / 2f, (rh - raw.getHeight()) / 2f);
+            m.postScale(tw / (float) rw, tw / (float) rw);
+            new android.graphics.Canvas(dst).drawBitmap(raw, m, carPaint);
+            CarBridge.frame = dst; CarBridge.frameAt = now;
+        } catch (Exception e) {
+            Log.w(TAG, "car picture", e);
+        } finally {
+            if (raw != null) raw.recycle();
+        }
+    }
+
     private void analyze(ImageProxy image) {
         Bitmap frame = null;
         try {
             if (detector == null) return;
             long now = SystemClock.elapsedRealtime();
+            if (CarBridge.shown && now - carAt >= 80) shareWithCar(image, now);
             double speed = egoSpeed;
             if (speed > 1) stillSince = -1; else if (stillSince < 0) stillSince = now;
             if (now - lookedAt < Pace.detectMs(heat, speed, stillSince < 0 ? 0 : now - stillSince)) return;

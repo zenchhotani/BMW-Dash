@@ -602,6 +602,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
     @Override public void onVision(List<Track> seen, LaneState l, int w, int h, int fps) {
         lane = l;
         tracks = seen;
+        CarBridge.tracks = seen; CarBridge.lane = l; CarBridge.frameW = w; CarBridge.frameH = h;
+        CarBridge.lanesOn = lanesOn() && !lanesUnsafe(l); CarBridge.updated = SystemClock.elapsedRealtime();
         CarId.Result known = null;
         for (Track t : seen) if (t.lead) known = carId.get(t.id);
         overlay.leadName = known == null ? "" : known.label();
@@ -742,6 +744,8 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
         boolean twice = prefs.cleanScreen() && now < stopUntil && signChip.getText().toString().endsWith("Stop sign");
         signChip.setVisibility(now < signUntil && !twice ? View.VISIBLE : View.GONE);
         if (prefs.view3d() && !calibrating) roadView.update(guideNow, seeing ? light : 0, speed, poorView, heat);
+        CarBridge.speed = speed; CarBridge.limit = limit; CarBridge.light = seeing ? light : 0; CarBridge.mph = prefs.mph();
+        CarBridge.poorView = poorView; CarBridge.heat = heat; CarBridge.guide = guideNow; CarBridge.updated = now;
     }
 
     private void carCard(boolean seeing, boolean fresh) {
@@ -967,6 +971,7 @@ public class MainActivity extends ComponentActivity implements CameraEngine.List
 
     private void show(int level, String text, String speak, boolean aloud, long now) {
         adviceBar.setText(text);
+        CarBridge.alertLevel = level; CarBridge.alertText = text;
         String key = level + text.replaceAll("[0-9.]+", "");
         if (!key.equals(adviceSeen)) { adviceSeen = key; adviceSince = now; }
         // clean screen: danger stays, other messages are shown briefly and then get out of the way
